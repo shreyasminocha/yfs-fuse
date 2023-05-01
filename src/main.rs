@@ -25,16 +25,7 @@ fn main() {
     let disk_file = File::open(disk_file_path).expect("unable to open disk file");
 
     let yfs = YfsDisk::new(disk_file);
-    let root_inode = yfs.read_inode(1);
-    println!("/");
-
-    let entries = yfs.read_directory(root_inode);
-    for entry in entries {
-        println!("└── {} ({})", entry.name, entry.inum);
-    }
-
-    todo!();
 
     let mountpoint = matches.value_of("MOUNT_POINT").unwrap();
-    fuser::mount2(Yfs(disk_file), mountpoint, &[]).unwrap();
+    fuser::mount2(Yfs(yfs), mountpoint, &[]).unwrap();
 }

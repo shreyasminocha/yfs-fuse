@@ -6,7 +6,7 @@ use serde_repr::{Deserialize_repr, Serialize_repr};
 const SECTOR_SIZE: usize = 512;
 
 /// size of a disk sector in bytes
-const BLOCK_SIZE: usize = SECTOR_SIZE;
+pub const BLOCK_SIZE: usize = SECTOR_SIZE;
 
 const BOOT_SECTOR_SIZE: usize = SECTOR_SIZE;
 
@@ -16,7 +16,7 @@ const NUM_SECTORS: usize = 1426;
 const INODE_SIZE: usize = 64;
 const NUM_DIRECT: usize = 12;
 
-type InodeNumber = i16;
+pub type InodeNumber = i16;
 
 #[derive(Debug, Deserialize)]
 pub struct DirectoryName([u8; 30]);
@@ -43,22 +43,22 @@ pub struct DirectoryEntry {
 #[repr(C)]
 pub struct Inode {
     /// file type (e.g., directory or regular)
-    type_: FileType,
+    pub type_: InodeType,
     /// number of hard links to inode
-    nlink: i16,
+    pub nlink: i16,
     /// inode reuse count
-    reuse: i32,
+    pub reuse: i32,
     /// file size in bytes
-    size: i32,
+    pub size: i32,
     /// block #s for 1st NUM_DIRECT blocks
-    direct: [i32; NUM_DIRECT],
+    pub direct: [i32; NUM_DIRECT],
     /// block number of indirect block
-    indirect: i32,
+    pub indirect: i32,
 }
 
 #[derive(Clone, Copy, Debug, Serialize_repr, Deserialize_repr)]
 #[repr(i16)]
-pub enum FileType {
+pub enum InodeType {
     /// This inode is not in use for any file.
     Free = 0,
     /// This inode describes a directory.
