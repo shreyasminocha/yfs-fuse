@@ -26,10 +26,12 @@ fn main() {
 
     let yfs = YfsDisk::new(disk_file);
     let root_inode = yfs.read_inode(1);
-    println!("root_inode: {:?}", root_inode);
+    println!("/");
 
     let entries = yfs.read_directory(root_inode);
-    println!("entries: {:?}", entries);
+    for entry in entries {
+        println!("└── {} ({})", entry.name, entry.inum);
+    }
 
     todo!();
 

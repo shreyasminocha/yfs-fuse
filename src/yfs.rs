@@ -1,4 +1,4 @@
-use std::{fs::File, os::unix::prelude::FileExt};
+use std::{fmt, fs::File, os::unix::prelude::FileExt};
 
 use serde::Deserialize;
 use serde_repr::{Deserialize_repr, Serialize_repr};
@@ -19,12 +19,24 @@ const NUM_DIRECT: usize = 12;
 type InodeNumber = i16;
 
 #[derive(Debug, Deserialize)]
+pub struct DirectoryName([u8; 30]);
+
+impl fmt::Display for DirectoryName {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.0
+            .into_iter()
+            .take_while(|c| *c != 0)
+            .try_for_each(|c| write!(f, "{}", c as char))
+    }
+}
+
+#[derive(Debug, Deserialize)]
 #[repr(C)]
 pub struct DirectoryEntry {
     /// inode number
-    inum: InodeNumber,
+    pub inum: InodeNumber,
     /// file name (not null-terminated)
-    name: [u8; 30],
+    pub name: DirectoryName,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize)]
