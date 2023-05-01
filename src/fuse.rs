@@ -42,7 +42,9 @@ impl Filesystem for Yfs {
         _lock: Option<u64>,
         reply: ReplyData,
     ) {
-        todo!()
+        let inode = self.0.read_inode(ino as i16);
+        let data = self.0.read_file(inode, offset as usize, size as usize);
+        reply.data(&data);
     }
 
     fn readdir(

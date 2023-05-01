@@ -97,7 +97,7 @@ impl YfsDisk {
         entries
     }
 
-    fn read_file(&self, inode: Inode, offset: usize, size: usize) -> Vec<u8> {
+    pub fn read_file(&self, inode: Inode, offset: usize, size: usize) -> Vec<u8> {
         let end = offset + size;
 
         let mut data = vec![];
@@ -112,8 +112,7 @@ impl YfsDisk {
             let block_number = position / BLOCK_SIZE;
             let block = self.get_file_block(inode, block_number);
 
-            // todo: verify range
-            data.extend(block[start_offset..end_position].iter());
+            data.extend(block[start_offset..end_position - position].iter());
 
             position = end_position;
         }
@@ -138,17 +137,17 @@ impl YfsDisk {
         let indirect_blocks = self
             .get_block(inode.indirect.try_into().unwrap())
             .windows(4)
-            .map(|b| usize::from_le_bytes(b.try_into().unwrap()))
-            .collect::<Vec<usize>>();
+            .map(|b| u32::from_le_bytes(b.try_into().unwrap()))
+            .collect::<Vec<u32>>();
 
-        Ok(indirect_blocks[n - NUM_DIRECT])
+        Ok(indirect_blocks[n - NUM_DIRECT] as usize)
     }
 
     fn get_block(&self, block_number: usize) -> Vec<u8> {
         let mut buf = vec![0; BLOCK_SIZE];
         let position = block_number * BLOCK_SIZE;
 
-        self.0.read_exact_at(&mut buf, position as u64).unwrap();
+        self.0.read_at(&mut buf, position as u64).unwrap();
         buf
     }
 }
