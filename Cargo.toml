@@ -9,3 +9,4 @@ clap = { version = "3.1.6", features = ["cargo"] }
 fuser = "0.12"
 libc = "0.2"
 serde = { version = "1.0.160", features = ["derive"] }
+serde_repr = "0.1.12"

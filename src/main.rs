@@ -2,6 +2,7 @@ use clap::{crate_version, Arg, Command};
 use std::fs::File;
 
 use yfs::fuse::Yfs;
+use yfs::yfs::YfsDisk;
 
 fn main() {
     let matches = Command::new("yfs")
@@ -23,9 +24,15 @@ fn main() {
     let disk_file_path = matches.value_of("DISK_FILE").unwrap();
     let disk_file = File::open(disk_file_path).expect("unable to open disk file");
 
-    let mountpoint = matches.value_of("MOUNT_POINT").unwrap();
+    let yfs = YfsDisk::new(disk_file);
+    let root_inode = yfs.read_inode(1);
+    println!("root_inode: {:?}", root_inode);
+
+    let entries = yfs.read_directory(root_inode);
+    println!("entries: {:?}", entries);
 
     todo!();
 
+    let mountpoint = matches.value_of("MOUNT_POINT").unwrap();
     fuser::mount2(Yfs(disk_file), mountpoint, &[]).unwrap();
 }
