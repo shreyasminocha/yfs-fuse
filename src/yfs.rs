@@ -1,4 +1,6 @@
-use std::{fmt, fs::File, os::unix::prelude::FileExt};
+use std::io;
+use std::os::linux::fs::MetadataExt;
+use std::{fmt, fs::File, os::unix::prelude::FileExt, time::SystemTime};
 
 use serde::Deserialize;
 use serde_repr::{Deserialize_repr, Serialize_repr};
@@ -11,7 +13,7 @@ pub const BLOCK_SIZE: usize = SECTOR_SIZE;
 const BOOT_SECTOR_SIZE: usize = SECTOR_SIZE;
 
 /// number of sectors on the disk
-const NUM_SECTORS: usize = 1426;
+const _NUM_SECTORS: usize = 1426;
 
 const INODE_SIZE: usize = 64;
 const NUM_DIRECT: usize = 12;
@@ -118,6 +120,26 @@ impl YfsDisk {
         }
 
         data
+    }
+
+    pub fn atime(&self) -> io::Result<SystemTime> {
+        self.0.metadata()?.accessed()
+    }
+
+    pub fn mtime(&self) -> io::Result<SystemTime> {
+        self.0.metadata()?.modified()
+    }
+
+    pub fn crtime(&self) -> io::Result<SystemTime> {
+        self.0.metadata()?.created()
+    }
+
+    pub fn uid(&self) -> io::Result<u32> {
+        Ok(self.0.metadata()?.st_uid())
+    }
+
+    pub fn gid(&self) -> io::Result<u32> {
+        Ok(self.0.metadata()?.st_gid())
     }
 
     fn get_file_block(&self, inode: Inode, n: usize) -> Vec<u8> {

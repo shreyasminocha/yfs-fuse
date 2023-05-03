@@ -1,10 +1,40 @@
 use fuser::{FileType, Filesystem, ReplyAttr, ReplyData, ReplyDirectory, ReplyEntry, Request};
 use libc::ENOENT;
-use std::ffi::OsStr;
+use std::{ffi::OsStr, time::UNIX_EPOCH};
 
 use crate::yfs::{Inode, InodeType, YfsDisk, BLOCK_SIZE};
 
 pub struct Yfs(pub YfsDisk);
+
+impl Yfs {
+    /// Converts an inode to a fuse FileAttr.
+    ///
+    /// Sets uid and gid to 0. Sets permissions to 755.
+    fn inode_to_attr(&self, ino: u64, inode: Inode) -> fuser::FileAttr {
+        fuser::FileAttr {
+            ino,
+            size: inode.size as u64,
+            blocks: (inode.size as u64 + BLOCK_SIZE as u64 - 1) / BLOCK_SIZE as u64,
+            atime: self.0.atime().unwrap_or(UNIX_EPOCH),
+            mtime: self.0.mtime().unwrap_or(UNIX_EPOCH),
+            ctime: self.0.mtime().unwrap_or(UNIX_EPOCH),
+            crtime: self.0.crtime().unwrap_or(UNIX_EPOCH),
+            kind: match inode.type_ {
+                InodeType::Directory => FileType::Directory,
+                InodeType::Regular => FileType::RegularFile,
+                InodeType::Free => panic!(),
+                _ => unreachable!(),
+            },
+            perm: 0o755,
+            nlink: inode.nlink as u32,
+            uid: self.0.uid().unwrap_or(0),
+            gid: self.0.gid().unwrap_or(0),
+            rdev: 0,
+            flags: 0,
+            blksize: BLOCK_SIZE as u32,
+        }
+    }
+}
 
 impl Filesystem for Yfs {
     fn lookup(&mut self, _req: &Request, parent: u64, name: &OsStr, reply: ReplyEntry) {
@@ -16,7 +46,7 @@ impl Filesystem for Yfs {
 
                 reply.entry(
                     &std::time::Duration::new(1, 0),
-                    &inode_to_attr(entry.inum as u64, entry_inode),
+                    &self.inode_to_attr(entry.inum as u64, entry_inode),
                     1,
                 );
                 return;
@@ -28,7 +58,11 @@ impl Filesystem for Yfs {
 
     fn getattr(&mut self, _req: &Request, ino: u64, reply: ReplyAttr) {
         let inode = self.0.read_inode(ino as i16);
-        reply.attr(&std::time::Duration::new(1, 0), &inode_to_attr(ino, inode));
+
+        reply.attr(
+            &std::time::Duration::new(1, 0),
+            &self.inode_to_attr(ino, inode),
+        );
     }
 
     fn read(
@@ -79,30 +113,5 @@ impl Filesystem for Yfs {
         }
 
         reply.ok();
-    }
-}
-
-fn inode_to_attr(ino: u64, inode: Inode) -> fuser::FileAttr {
-    fuser::FileAttr {
-        ino,
-        size: inode.size as u64,
-        blocks: (inode.size as u64 + BLOCK_SIZE as u64 - 1) / BLOCK_SIZE as u64,
-        atime: std::time::UNIX_EPOCH,
-        mtime: std::time::UNIX_EPOCH,
-        ctime: std::time::UNIX_EPOCH,
-        crtime: std::time::UNIX_EPOCH,
-        kind: match inode.type_ {
-            InodeType::Directory => FileType::Directory,
-            InodeType::Regular => FileType::RegularFile,
-            InodeType::Free => panic!(),
-            _ => unreachable!(),
-        },
-        perm: 0o755,
-        nlink: inode.nlink as u32,
-        uid: 0,
-        gid: 0,
-        rdev: 0,
-        flags: 0,
-        blksize: BLOCK_SIZE as u32,
     }
 }
