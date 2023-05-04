@@ -22,7 +22,11 @@ fn main() {
         .get_matches();
 
     let disk_file_path = matches.value_of("DISK_FILE").unwrap();
-    let disk_file = File::open(disk_file_path).expect("unable to open disk file");
+    let disk_file = File::options()
+        .read(true)
+        .write(true)
+        .open(disk_file_path)
+        .expect("unable to open disk file in read-write mode");
 
     let yfs = YfsDisk::new(disk_file);
 

@@ -111,8 +111,8 @@ impl YfsDisk {
                 end_position = end;
             }
 
-            let block_number = position / BLOCK_SIZE;
-            let block = self.get_file_block(inode, block_number);
+            let block_index = position / BLOCK_SIZE;
+            let block = self.get_file_block(inode, block_index);
 
             data.extend(block[start_offset..end_position - position].iter());
 
@@ -120,6 +120,38 @@ impl YfsDisk {
         }
 
         data
+    }
+
+    pub fn write_file(&self, inode: Inode, offset: usize, data: Vec<u8>) {
+        // todo: grow file if necessary
+
+        let mut position = offset;
+        let end = offset + data.len();
+
+        while position < end {
+            let start_offset = position % BLOCK_SIZE;
+            let mut end_position = position - start_offset + BLOCK_SIZE;
+            if end_position > end {
+                end_position = end;
+            }
+
+            let block_index = position / BLOCK_SIZE;
+            let mut block = self.get_file_block(inode, block_index);
+
+            assert_eq!(
+                (end_position - position) - start_offset,
+                end_position - position
+            );
+
+            block.splice(
+                start_offset..end_position - position,
+                data[position..end_position].iter().cloned(),
+            );
+
+            self.write_file_block(inode, block_index, block);
+
+            position = end_position;
+        }
     }
 
     pub fn atime(&self) -> io::Result<SystemTime> {
@@ -149,6 +181,15 @@ impl YfsDisk {
             Ok(b) => self.get_block(b),
             Err(_) => vec![0; BLOCK_SIZE],
         }
+    }
+
+    fn write_file_block(&self, inode: Inode, n: usize, block: Vec<u8>) {
+        // todo: properly handle an error here
+        let block_number = self.get_file_block_number(inode, n).unwrap();
+        let position = block_number * BLOCK_SIZE;
+
+        // todo: deal with short writes
+        self.0.write_at(&block, position as u64).unwrap();
     }
 
     fn get_file_block_number(&self, inode: Inode, n: usize) -> Result<usize, ()> {
