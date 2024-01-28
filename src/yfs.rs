@@ -2,6 +2,7 @@ use std::io;
 use std::os::linux::fs::MetadataExt;
 use std::{fmt, fs::File, os::unix::prelude::FileExt, time::SystemTime};
 
+use bitvec::vec::BitVec;
 use serde::Deserialize;
 use serde_repr::{Deserialize_repr, Serialize_repr};
 
@@ -71,11 +72,47 @@ pub enum InodeType {
     Symlink = 3,
 }
 
-pub struct YfsDisk(pub File);
+#[derive(Deserialize)]
+#[repr(C)]
+struct FileSystemHeader {
+    num_blocks: i32,
+    num_inodes: i32,
+    padding: [u8; 14],
+}
+
+pub struct YfsDisk {
+    pub file: File,
+    pub num_blocks: usize,
+    pub num_inodes: usize,
+    pub block_bitmap: BitVec,
+}
 
 impl YfsDisk {
     pub fn new(file: File) -> Self {
-        Self(file)
+        let mut header = vec![0; BLOCK_SIZE];
+        let header_block_number = 1;
+        let position = header_block_number * BLOCK_SIZE;
+
+        file.read_at(&mut header, position as u64).unwrap();
+
+        let header: FileSystemHeader = bincode::deserialize(&header).unwrap();
+        let num_blocks = header.num_blocks as usize;
+        let num_inodes = header.num_inodes as usize;
+
+        let mut block_bitmap = BitVec::new();
+        block_bitmap.resize(num_blocks, false);
+
+        let last_inode_block = 1 + num_inodes / (BLOCK_SIZE / INODE_SIZE);
+        for b in 0..=last_inode_block {
+            block_bitmap.set(b, true);
+        }
+
+        Self {
+            file,
+            num_blocks,
+            num_inodes,
+            block_bitmap,
+        }
     }
 
     pub fn read_inode(&self, inum: InodeNumber) -> Inode {
@@ -122,9 +159,7 @@ impl YfsDisk {
         data
     }
 
-    pub fn write_file(&self, inode: Inode, offset: usize, data: Vec<u8>) {
-        // todo: grow file if necessary
-
+    pub fn write_file(&mut self, inode: Inode, offset: usize, data: Vec<u8>) {
         let mut position = offset;
         let end = offset + data.len();
 
@@ -155,23 +190,23 @@ impl YfsDisk {
     }
 
     pub fn atime(&self) -> io::Result<SystemTime> {
-        self.0.metadata()?.accessed()
+        self.file.metadata()?.accessed()
     }
 
     pub fn mtime(&self) -> io::Result<SystemTime> {
-        self.0.metadata()?.modified()
+        self.file.metadata()?.modified()
     }
 
     pub fn crtime(&self) -> io::Result<SystemTime> {
-        self.0.metadata()?.created()
+        self.file.metadata()?.created()
     }
 
     pub fn uid(&self) -> io::Result<u32> {
-        Ok(self.0.metadata()?.st_uid())
+        Ok(self.file.metadata()?.st_uid())
     }
 
     pub fn gid(&self) -> io::Result<u32> {
-        Ok(self.0.metadata()?.st_gid())
+        Ok(self.file.metadata()?.st_gid())
     }
 
     fn get_file_block(&self, inode: Inode, n: usize) -> Vec<u8> {
@@ -189,7 +224,7 @@ impl YfsDisk {
         let position = block_number * BLOCK_SIZE;
 
         // todo: deal with short writes
-        self.0.write_at(&block, position as u64).unwrap();
+        self.file.write_at(&block, position as u64).unwrap();
     }
 
     fn get_file_block_number(&self, inode: Inode, n: usize) -> Result<usize, ()> {
@@ -210,7 +245,7 @@ impl YfsDisk {
         let mut buf = vec![0; BLOCK_SIZE];
         let position = block_number * BLOCK_SIZE;
 
-        self.0.read_at(&mut buf, position as u64).unwrap();
+        self.file.read_at(&mut buf, position as u64).unwrap();
         buf
     }
 }
