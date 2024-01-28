@@ -1,28 +1,23 @@
 use anyhow::{Context, Result};
-use clap::{crate_version, Arg, Command};
+use clap::Parser;
 use std::fs::File;
+use std::path::PathBuf;
 
 use yfs::fuse::Yfs;
 use yfs::yfs::YfsDisk;
 
-fn main() -> Result<()> {
-    let matches = Command::new("yfs")
-        .version(crate_version!())
-        .arg(
-            Arg::new("DISK_FILE")
-                .required(true)
-                .index(1)
-                .help("YFS disk file"),
-        )
-        .arg(
-            Arg::new("MOUNT_POINT")
-                .required(true)
-                .index(2)
-                .help("FUSE mountpoint"),
-        )
-        .get_matches();
+#[derive(Parser)]
+struct Args {
+    /// YFS disk file
+    disk_file: PathBuf,
+    /// FUSE mountpoint
+    mountpoint: PathBuf,
+}
 
-    let disk_file_path = matches.value_of("DISK_FILE").unwrap();
+fn main() -> Result<()> {
+    let args = Args::parse();
+
+    let disk_file_path = args.disk_file;
     let disk_file = File::options()
         .read(true)
         .write(true)
@@ -31,7 +26,7 @@ fn main() -> Result<()> {
 
     let yfs = YfsDisk::from_file(disk_file)?;
 
-    let mountpoint = matches.value_of("MOUNT_POINT").unwrap();
+    let mountpoint = args.mountpoint;
     fuser::mount2(Yfs(yfs), mountpoint, &[]).unwrap();
 
     Ok(())
