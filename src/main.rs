@@ -1,10 +1,11 @@
+use anyhow::{Context, Result};
 use clap::{crate_version, Arg, Command};
 use std::fs::File;
 
 use yfs::fuse::Yfs;
 use yfs::yfs::YfsDisk;
 
-fn main() {
+fn main() -> Result<()> {
     let matches = Command::new("yfs")
         .version(crate_version!())
         .arg(
@@ -26,10 +27,12 @@ fn main() {
         .read(true)
         .write(true)
         .open(disk_file_path)
-        .expect("unable to open disk file in read-write mode");
+        .context("unable to open disk file in read-write mode")?;
 
-    let yfs = YfsDisk::new(disk_file);
+    let yfs = YfsDisk::from_file(disk_file)?;
 
     let mountpoint = matches.value_of("MOUNT_POINT").unwrap();
     fuser::mount2(Yfs(yfs), mountpoint, &[]).unwrap();
+
+    Ok(())
 }

@@ -38,11 +38,22 @@ impl Yfs {
 
 impl Filesystem for Yfs {
     fn lookup(&mut self, _req: &Request, parent: u64, name: &OsStr, reply: ReplyEntry) {
-        let parent_inode = self.0.read_inode(parent as i16);
+        let Ok(parent_inode) = self.0.read_inode(parent as i16) else {
+            reply.error(ENOENT);
+            return;
+        };
 
-        for entry in self.0.read_directory(parent_inode) {
+        let Ok(entries) = self.0.read_directory(parent_inode) else {
+            reply.error(ENOENT);
+            return;
+        };
+
+        for entry in entries {
             if entry.name.to_string() == name.to_string_lossy() {
-                let entry_inode = self.0.read_inode(entry.inum);
+                let Ok(entry_inode) = self.0.read_inode(entry.inum) else {
+                    reply.error(ENOENT);
+                    return;
+                };
 
                 reply.entry(
                     &std::time::Duration::new(1, 0),
@@ -57,7 +68,10 @@ impl Filesystem for Yfs {
     }
 
     fn getattr(&mut self, _req: &Request, ino: u64, reply: ReplyAttr) {
-        let inode = self.0.read_inode(ino as i16);
+        let Ok(inode) = self.0.read_inode(ino as i16) else {
+            reply.error(ENOENT);
+            return;
+        };
 
         reply.attr(
             &std::time::Duration::new(1, 0),
@@ -76,8 +90,16 @@ impl Filesystem for Yfs {
         _lock: Option<u64>,
         reply: ReplyData,
     ) {
-        let inode = self.0.read_inode(ino as i16);
-        let data = self.0.read_file(inode, offset as usize, size as usize);
+        let Ok(inode) = self.0.read_inode(ino as i16) else {
+            reply.error(ENOENT);
+            return;
+        };
+
+        let Ok(data) = self.0.read_file(inode, offset as usize, size as usize) else {
+            reply.error(ENOENT);
+            return;
+        };
+
         reply.data(&data);
     }
 
@@ -89,11 +111,20 @@ impl Filesystem for Yfs {
         offset: i64,
         mut reply: ReplyDirectory,
     ) {
-        let inode = self.0.read_inode(ino as i16);
-        let entries = self.0.read_directory(inode);
+        let Ok(inode) = self.0.read_inode(ino as i16) else {
+            reply.error(ENOENT);
+            return;
+        };
+        let Ok(entries) = self.0.read_directory(inode) else {
+            reply.error(ENOENT);
+            return;
+        };
 
         for (i, entry) in entries.iter().enumerate().skip(offset as usize) {
-            let entry_inode = self.0.read_inode(entry.inum);
+            let Ok(entry_inode) = self.0.read_inode(entry.inum) else {
+                reply.error(ENOENT);
+                return;
+            };
 
             let entry_type = match entry_inode.type_ {
                 InodeType::Directory => FileType::Directory,
