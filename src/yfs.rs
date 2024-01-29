@@ -1,11 +1,12 @@
-use std::io;
 use std::os::linux::fs::MetadataExt;
-use std::{fmt, fs::File, os::unix::prelude::FileExt, time::SystemTime};
+use std::{fmt, fs::File, os::unix::prelude::FileExt};
 
 use anyhow::{Context, Result};
 use bitvec::vec::BitVec;
 use serde::Deserialize;
 use serde_repr::{Deserialize_repr, Serialize_repr};
+
+use crate::fs::{OwnershipMetadata, TimeMetadata};
 
 const SECTOR_SIZE: usize = 512;
 
@@ -196,24 +197,23 @@ impl YfsDisk {
         Ok(())
     }
 
-    pub fn atime(&self) -> io::Result<SystemTime> {
-        self.file.metadata()?.accessed()
+    pub fn time_metadata(&self) -> Result<TimeMetadata> {
+        let metadata = self.file.metadata()?;
+
+        Ok(TimeMetadata {
+            atime: metadata.accessed()?,
+            mtime: metadata.modified()?,
+            crtime: metadata.created()?,
+        })
     }
 
-    pub fn mtime(&self) -> io::Result<SystemTime> {
-        self.file.metadata()?.modified()
-    }
+    pub fn ownership_metadata(&self) -> Result<OwnershipMetadata> {
+        let metadata = self.file.metadata()?;
 
-    pub fn crtime(&self) -> io::Result<SystemTime> {
-        self.file.metadata()?.created()
-    }
-
-    pub fn uid(&self) -> io::Result<u32> {
-        Ok(self.file.metadata()?.st_uid())
-    }
-
-    pub fn gid(&self) -> io::Result<u32> {
-        Ok(self.file.metadata()?.st_gid())
+        Ok(OwnershipMetadata {
+            uid: metadata.st_uid(),
+            gid: metadata.st_gid(),
+        })
     }
 
     /// Gets the contents of the request block number of the inode.

@@ -1,6 +1,6 @@
 use fuser::{FileType, Filesystem, ReplyAttr, ReplyData, ReplyDirectory, ReplyEntry, Request};
 use libc::ENOENT;
-use std::{ffi::OsStr, time::UNIX_EPOCH};
+use std::ffi::OsStr;
 
 use crate::yfs::{Inode, InodeType, YfsDisk, BLOCK_SIZE};
 
@@ -11,14 +11,17 @@ impl Yfs {
     ///
     /// Sets uid and gid to 0. Sets permissions to 755.
     fn inode_to_attr(&self, ino: u64, inode: Inode) -> fuser::FileAttr {
+        let time_metadata = self.0.time_metadata().unwrap_or_default();
+        let ownership_metadata = self.0.ownership_metadata().unwrap_or_default();
+
         fuser::FileAttr {
             ino,
             size: inode.size as u64,
             blocks: (inode.size as u64 + BLOCK_SIZE as u64 - 1) / BLOCK_SIZE as u64,
-            atime: self.0.atime().unwrap_or(UNIX_EPOCH),
-            mtime: self.0.mtime().unwrap_or(UNIX_EPOCH),
-            ctime: self.0.mtime().unwrap_or(UNIX_EPOCH),
-            crtime: self.0.crtime().unwrap_or(UNIX_EPOCH),
+            atime: time_metadata.atime,
+            mtime: time_metadata.mtime,
+            ctime: time_metadata.mtime,
+            crtime: time_metadata.crtime,
             kind: match inode.type_ {
                 InodeType::Directory => FileType::Directory,
                 InodeType::Regular => FileType::RegularFile,
@@ -27,8 +30,8 @@ impl Yfs {
             },
             perm: 0o755,
             nlink: inode.nlink as u32,
-            uid: self.0.uid().unwrap_or(0),
-            gid: self.0.gid().unwrap_or(0),
+            uid: ownership_metadata.uid,
+            gid: ownership_metadata.gid,
             rdev: 0,
             flags: 0,
             blksize: BLOCK_SIZE as u32,
