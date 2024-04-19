@@ -1,8 +1,9 @@
 use fuser::{FileType, Filesystem, ReplyAttr, ReplyData, ReplyDirectory, ReplyEntry, Request};
-use libc::ENOENT;
+use libc::{EINVAL, ENOENT};
 use std::ffi::OsStr;
 
-use crate::yfs::{Inode, InodeType, YfsDisk, BLOCK_SIZE};
+use crate::disk_format::{Inode, InodeType, BLOCK_SIZE};
+use crate::yfs::{InodeNumber, YfsDisk};
 
 pub struct Yfs(pub YfsDisk);
 
@@ -10,12 +11,12 @@ impl Yfs {
     /// Converts an inode to a fuse FileAttr.
     ///
     /// Sets uid and gid to 0. Sets permissions to 755.
-    fn inode_to_attr(&self, ino: u64, inode: Inode) -> fuser::FileAttr {
+    fn inode_to_attr(&self, ino: InodeNumber, inode: Inode) -> fuser::FileAttr {
         let time_metadata = self.0.time_metadata().unwrap_or_default();
         let ownership_metadata = self.0.ownership_metadata().unwrap_or_default();
 
         fuser::FileAttr {
-            ino,
+            ino: ino as u64,
             size: inode.size as u64,
             blocks: (inode.size as u64 + BLOCK_SIZE as u64 - 1) / BLOCK_SIZE as u64,
             atime: time_metadata.atime,
@@ -41,7 +42,12 @@ impl Yfs {
 
 impl Filesystem for Yfs {
     fn lookup(&mut self, _req: &Request, parent: u64, name: &OsStr, reply: ReplyEntry) {
-        let Ok(parent_inode) = self.0.read_inode(parent as i16) else {
+        let Ok(parent_inum) = parent.try_into() else {
+            reply.error(EINVAL);
+            return;
+        };
+
+        let Ok(parent_inode) = self.0.read_inode(parent_inum) else {
             reply.error(ENOENT);
             return;
         };
@@ -53,14 +59,19 @@ impl Filesystem for Yfs {
 
         for entry in entries {
             if entry.name.to_string() == name.to_string_lossy() {
-                let Ok(entry_inode) = self.0.read_inode(entry.inum) else {
+                let Ok(entry_inum) = entry.inum.try_into() else {
+                    reply.error(EINVAL);
+                    return;
+                };
+
+                let Ok(entry_inode) = self.0.read_inode(entry_inum) else {
                     reply.error(ENOENT);
                     return;
                 };
 
                 reply.entry(
                     &std::time::Duration::new(1, 0),
-                    &self.inode_to_attr(entry.inum as u64, entry_inode),
+                    &self.inode_to_attr(entry_inum, entry_inode),
                     1,
                 );
                 return;
@@ -71,14 +82,19 @@ impl Filesystem for Yfs {
     }
 
     fn getattr(&mut self, _req: &Request, ino: u64, reply: ReplyAttr) {
-        let Ok(inode) = self.0.read_inode(ino as i16) else {
+        let Ok(inum) = ino.try_into() else {
+            reply.error(EINVAL);
+            return;
+        };
+
+        let Ok(inode) = self.0.read_inode(inum) else {
             reply.error(ENOENT);
             return;
         };
 
         reply.attr(
             &std::time::Duration::new(1, 0),
-            &self.inode_to_attr(ino, inode),
+            &self.inode_to_attr(inum, inode),
         );
     }
 
@@ -93,7 +109,12 @@ impl Filesystem for Yfs {
         _lock: Option<u64>,
         reply: ReplyData,
     ) {
-        let Ok(inode) = self.0.read_inode(ino as i16) else {
+        let Ok(inum) = ino.try_into() else {
+            reply.error(EINVAL);
+            return;
+        };
+
+        let Ok(inode) = self.0.read_inode(inum) else {
             reply.error(ENOENT);
             return;
         };
@@ -114,17 +135,28 @@ impl Filesystem for Yfs {
         offset: i64,
         mut reply: ReplyDirectory,
     ) {
-        let Ok(inode) = self.0.read_inode(ino as i16) else {
+        let Ok(inum) = ino.try_into() else {
+            reply.error(EINVAL);
+            return;
+        };
+
+        let Ok(inode) = self.0.read_inode(inum) else {
             reply.error(ENOENT);
             return;
         };
+
         let Ok(entries) = self.0.read_directory(inode) else {
             reply.error(ENOENT);
             return;
         };
 
         for (i, entry) in entries.iter().enumerate().skip(offset as usize) {
-            let Ok(entry_inode) = self.0.read_inode(entry.inum) else {
+            let Ok(entry_inum) = entry.inum.try_into() else {
+                reply.error(EINVAL);
+                return;
+            };
+
+            let Ok(entry_inode) = self.0.read_inode(entry_inum) else {
                 reply.error(ENOENT);
                 return;
             };
