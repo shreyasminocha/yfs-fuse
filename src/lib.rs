@@ -1,4 +1,4 @@
-#![feature(array_windows)]
+#![feature(array_chunks)]
 
 pub mod disk_format;
 pub mod fs;

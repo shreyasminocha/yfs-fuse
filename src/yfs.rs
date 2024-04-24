@@ -187,7 +187,7 @@ impl YfsDisk {
 
         let indirect_blocks = self
             .get_block(indirect_block_number)?
-            .array_windows::<4>()
+            .array_chunks::<4>()
             .map(|b| u32::from_le_bytes(*b))
             .collect::<Vec<u32>>();
 
