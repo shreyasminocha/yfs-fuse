@@ -164,7 +164,7 @@ impl YfsDisk {
 
         // we're careful to read the inode *after* potentially growing the file
         // because that operation manipulates the inode
-        let inode = self.read_inode(inum)?;
+        let mut inode = self.read_inode(inum)?;
 
         let mut write_len = 0;
         while position < end {
@@ -184,6 +184,9 @@ impl YfsDisk {
             write_len += (end_position - position) - start_offset;
             position = end_position;
         }
+
+        inode.size = inode.size.max((offset + write_len) as i32);
+        self.write_inode(inum, inode)?;
 
         info!("[inode #{inum}] wrote {write_len} bytes");
         Ok(write_len)
@@ -208,6 +211,8 @@ impl YfsDisk {
         })
     }
 
+    /// Allocates new blocks if necessary.
+    /// Does not update the size stored in the inode.
     fn grow_file(&mut self, inum: InodeNumber, new_size: usize) -> Result<()> {
         let mut inode = self.read_inode(inum)?;
 
@@ -215,8 +220,6 @@ impl YfsDisk {
             // no need to grow the file
             return Ok(());
         }
-
-        inode.size = new_size as i32;
 
         let new_num_blocks = new_size.div_ceil(BLOCK_SIZE);
 
@@ -274,7 +277,7 @@ impl YfsDisk {
             self.write_block(inode.indirect as usize, indirect_block)?;
         }
 
-        // update the inode with the new direct/indirect blocks and size
+        // update the inode with the new direct/indirect blocks
         self.write_inode(inum, inode)?;
 
         Ok(())

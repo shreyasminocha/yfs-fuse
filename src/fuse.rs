@@ -257,13 +257,14 @@ impl Filesystem for Yfs {
             return;
         };
 
-        let Ok(inode) = self.yfs_disk.read_inode(inum) else {
-            reply.error(EINVAL);
+        let Ok(write_len) = self.yfs_disk.write_file(inum, offset as usize, data) else {
+            reply.error(ENOENT);
             return;
         };
 
-        let Ok(size) = self.yfs_disk.write_file(inum, offset as usize, data) else {
-            reply.error(ENOENT);
+        // we're careful to read the inode *after* the write
+        let Ok(inode) = self.yfs_disk.read_inode(inum) else {
+            reply.error(EINVAL);
             return;
         };
 
@@ -275,6 +276,6 @@ impl Filesystem for Yfs {
         attr.size = inode.size as u64;
         attr.blocks = inode.size.div_ceil(BLOCK_SIZE as i32) as u64;
 
-        reply.written(size as u32);
+        reply.written(write_len as u32);
     }
 }
