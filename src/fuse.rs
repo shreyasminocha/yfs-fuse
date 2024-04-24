@@ -1,24 +1,59 @@
-use fuser::{FileType, Filesystem, ReplyAttr, ReplyData, ReplyDirectory, ReplyEntry, Request};
+use anyhow::Result;
+use fuser::{
+    FileType, Filesystem, ReplyAttr, ReplyData, ReplyDirectory, ReplyEntry, Request, TimeOrNow,
+};
 use libc::{EINVAL, ENOENT};
+use log::debug;
 use std::ffi::OsStr;
+use std::time::SystemTime;
 
-use crate::disk_format::{Inode, InodeType, BLOCK_SIZE};
+use crate::disk_format::{InodeType, BLOCK_SIZE};
 use crate::yfs::{InodeNumber, YfsDisk};
 
-pub struct Yfs(pub YfsDisk);
+pub struct Yfs {
+    yfs_disk: YfsDisk,
+    attributes: Vec<Option<fuser::FileAttr>>,
+    first_free_handle: u64,
+}
 
 impl Yfs {
+    pub fn new(yfs_disk: YfsDisk) -> Result<Yfs> {
+        let mut attributes = vec![];
+
+        for inum in 1..=yfs_disk.num_inodes {
+            let inode = yfs_disk.read_inode(inum as u16)?;
+
+            if inode.type_ == InodeType::Free {
+                debug!("free inode #{inum}");
+
+                // todo: remove temporary hack
+                // attributes.push(None);
+                attributes.push(Some(Self::inode_to_attr(&yfs_disk, inum as InodeNumber)?));
+            } else {
+                attributes.push(Some(Self::inode_to_attr(&yfs_disk, inum as InodeNumber)?));
+            }
+        }
+
+        Ok(Yfs {
+            yfs_disk,
+            attributes,
+            first_free_handle: 0,
+        })
+    }
+
     /// Converts an inode to a fuse FileAttr.
     ///
     /// Sets uid and gid to 0. Sets permissions to 755.
-    fn inode_to_attr(&self, ino: InodeNumber, inode: Inode) -> fuser::FileAttr {
-        let time_metadata = self.0.time_metadata().unwrap_or_default();
-        let ownership_metadata = self.0.ownership_metadata().unwrap_or_default();
+    fn inode_to_attr(yfs_disk: &YfsDisk, inum: InodeNumber) -> Result<fuser::FileAttr> {
+        let inode = yfs_disk.read_inode(inum)?;
 
-        fuser::FileAttr {
-            ino: ino as u64,
+        let time_metadata = yfs_disk.time_metadata().unwrap_or_default();
+        let ownership_metadata = yfs_disk.ownership_metadata().unwrap_or_default();
+
+        Ok(fuser::FileAttr {
+            ino: inum as u64,
             size: inode.size as u64,
-            blocks: (inode.size as u64 + BLOCK_SIZE as u64 - 1) / BLOCK_SIZE as u64,
+            blocks: inode.size.div_ceil(BLOCK_SIZE as i32) as u64,
             atime: time_metadata.atime,
             mtime: time_metadata.mtime,
             ctime: time_metadata.mtime,
@@ -26,7 +61,8 @@ impl Yfs {
             kind: match inode.type_ {
                 InodeType::Directory => FileType::Directory,
                 InodeType::Regular => FileType::RegularFile,
-                InodeType::Free => panic!(),
+                // todo: remove temporary hack
+                InodeType::Free => FileType::RegularFile,
                 _ => unreachable!(),
             },
             perm: 0o755,
@@ -36,7 +72,7 @@ impl Yfs {
             rdev: 0,
             flags: 0,
             blksize: BLOCK_SIZE as u32,
-        }
+        })
     }
 }
 
@@ -47,33 +83,19 @@ impl Filesystem for Yfs {
             return;
         };
 
-        let Ok(parent_inode) = self.0.read_inode(parent_inum) else {
-            reply.error(ENOENT);
-            return;
-        };
-
-        let Ok(entries) = self.0.read_directory(parent_inode) else {
+        let Ok(entries) = self.yfs_disk.read_directory(parent_inum) else {
             reply.error(ENOENT);
             return;
         };
 
         for entry in entries {
             if entry.name.to_string() == name.to_string_lossy() {
-                let Ok(entry_inum) = entry.inum.try_into() else {
-                    reply.error(EINVAL);
-                    return;
-                };
-
-                let Ok(entry_inode) = self.0.read_inode(entry_inum) else {
+                let Some(attr) = self.attributes[entry.inum as usize] else {
                     reply.error(ENOENT);
                     return;
                 };
 
-                reply.entry(
-                    &std::time::Duration::new(1, 0),
-                    &self.inode_to_attr(entry_inum, entry_inode),
-                    1,
-                );
+                reply.entry(&std::time::Duration::new(1, 0), &attr, 1);
                 return;
             }
         }
@@ -81,21 +103,65 @@ impl Filesystem for Yfs {
         reply.error(ENOENT);
     }
 
+    fn open(&mut self, _req: &Request<'_>, _ino: u64, flags: i32, reply: fuser::ReplyOpen) {
+        reply.opened(self.first_free_handle, flags as u32);
+        self.first_free_handle += 1;
+    }
+
+    fn opendir(&mut self, _req: &Request<'_>, _ino: u64, flags: i32, reply: fuser::ReplyOpen) {
+        reply.opened(self.first_free_handle, flags as u32);
+        self.first_free_handle += 1;
+    }
+
     fn getattr(&mut self, _req: &Request, ino: u64, reply: ReplyAttr) {
-        let Ok(inum) = ino.try_into() else {
+        let Some(attr) = self.attributes[ino as usize] else {
             reply.error(EINVAL);
             return;
         };
 
-        let Ok(inode) = self.0.read_inode(inum) else {
+        reply.attr(&std::time::Duration::new(1, 0), &attr);
+    }
+
+    fn setattr(
+        &mut self,
+        _req: &Request<'_>,
+        ino: u64,
+        _mode: Option<u32>,
+        _uid: Option<u32>,
+        _gid: Option<u32>,
+        size: Option<u64>,
+        atime: Option<fuser::TimeOrNow>,
+        mtime: Option<fuser::TimeOrNow>,
+        ctime: Option<std::time::SystemTime>,
+        _fh: Option<u64>,
+        _crtime: Option<std::time::SystemTime>,
+        _chgtime: Option<std::time::SystemTime>,
+        _bkuptime: Option<std::time::SystemTime>,
+        _flags: Option<u32>,
+        reply: ReplyAttr,
+    ) {
+        let Some(attr) = &mut self.attributes[ino as usize] else {
             reply.error(ENOENT);
             return;
         };
 
-        reply.attr(
-            &std::time::Duration::new(1, 0),
-            &self.inode_to_attr(inum, inode),
-        );
+        attr.size = size.unwrap_or(attr.size);
+
+        attr.atime = atime
+            .map(|t| match t {
+                TimeOrNow::SpecificTime(time) => time,
+                TimeOrNow::Now => SystemTime::now(),
+            })
+            .unwrap_or(attr.atime);
+        attr.mtime = mtime
+            .map(|t| match t {
+                TimeOrNow::SpecificTime(time) => time,
+                TimeOrNow::Now => SystemTime::now(),
+            })
+            .unwrap_or(attr.mtime);
+        attr.ctime = ctime.unwrap_or(attr.ctime);
+
+        reply.attr(&std::time::Duration::new(1, 0), attr);
     }
 
     fn read(
@@ -114,12 +180,10 @@ impl Filesystem for Yfs {
             return;
         };
 
-        let Ok(inode) = self.0.read_inode(inum) else {
-            reply.error(ENOENT);
-            return;
-        };
-
-        let Ok(data) = self.0.read_file(inode, offset as usize, size as usize) else {
+        let Ok(data) = self
+            .yfs_disk
+            .read_file(inum, offset as usize, size as usize)
+        else {
             reply.error(ENOENT);
             return;
         };
@@ -140,12 +204,7 @@ impl Filesystem for Yfs {
             return;
         };
 
-        let Ok(inode) = self.0.read_inode(inum) else {
-            reply.error(ENOENT);
-            return;
-        };
-
-        let Ok(entries) = self.0.read_directory(inode) else {
+        let Ok(entries) = self.yfs_disk.read_directory(inum) else {
             reply.error(ENOENT);
             return;
         };
@@ -156,7 +215,7 @@ impl Filesystem for Yfs {
                 return;
             };
 
-            let Ok(entry_inode) = self.0.read_inode(entry_inum) else {
+            let Ok(entry_inode) = self.yfs_disk.read_inode(entry_inum) else {
                 reply.error(ENOENT);
                 return;
             };
@@ -179,5 +238,43 @@ impl Filesystem for Yfs {
         }
 
         reply.ok();
+    }
+
+    fn write(
+        &mut self,
+        _req: &Request<'_>,
+        ino: u64,
+        _fh: u64,
+        offset: i64,
+        data: &[u8],
+        _write_flags: u32,
+        _flags: i32,
+        _lock_owner: Option<u64>,
+        reply: fuser::ReplyWrite,
+    ) {
+        let Ok(inum) = ino.try_into() else {
+            reply.error(EINVAL);
+            return;
+        };
+
+        let Ok(inode) = self.yfs_disk.read_inode(inum) else {
+            reply.error(EINVAL);
+            return;
+        };
+
+        let Ok(size) = self.yfs_disk.write_file(inum, offset as usize, data) else {
+            reply.error(ENOENT);
+            return;
+        };
+
+        let Some(attr) = &mut self.attributes[ino as usize] else {
+            reply.error(ENOENT);
+            return;
+        };
+
+        attr.size = inode.size as u64;
+        attr.blocks = inode.size.div_ceil(BLOCK_SIZE as i32) as u64;
+
+        reply.written(size as u32);
     }
 }

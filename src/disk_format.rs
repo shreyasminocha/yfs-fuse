@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_repr::{Deserialize_repr, Serialize_repr};
 
 const SECTOR_SIZE: usize = 512;
@@ -21,7 +21,7 @@ pub const NUM_INDIRECT: usize = BLOCK_SIZE / 4;
 
 pub const FS_HEADER_BLOCK_NUMBER: usize = 1;
 
-#[derive(Clone, Copy, Debug, Deserialize)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 #[repr(C)]
 pub struct Inode {
     /// file type (e.g., directory or regular)
@@ -38,7 +38,7 @@ pub struct Inode {
     pub indirect: i32,
 }
 
-#[derive(Clone, Copy, Debug, Serialize_repr, Deserialize_repr)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize_repr, Deserialize_repr)]
 #[repr(i16)]
 pub enum InodeType {
     /// This inode is not in use for any file.

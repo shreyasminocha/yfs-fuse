@@ -1,7 +1,8 @@
-use anyhow::{Context, Result};
-use clap::Parser;
 use std::fs::File;
 use std::path::PathBuf;
+
+use anyhow::{Context, Result};
+use clap::Parser;
 
 use yfs::fuse::Yfs;
 use yfs::yfs::YfsDisk;
@@ -15,6 +16,8 @@ struct Args {
 }
 
 fn main() -> Result<()> {
+    env_logger::init();
+
     let args = Args::parse();
 
     let disk_file_path = args.disk_file;
@@ -27,7 +30,7 @@ fn main() -> Result<()> {
     let yfs = YfsDisk::from_file(disk_file)?;
 
     let mountpoint = args.mountpoint;
-    fuser::mount2(Yfs(yfs), mountpoint, &[]).unwrap();
+    fuser::mount2(Yfs::new(yfs)?, mountpoint, &[]).unwrap();
 
     Ok(())
 }
