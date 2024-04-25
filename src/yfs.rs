@@ -228,11 +228,14 @@ impl<S: YfsStorage> Yfs<S> {
             let mut indirect_block_numbers = match self.get_indirect_block_numbers(inode)? {
                 Some(block_numbers) => block_numbers,
                 None => {
-                    inode.indirect =
-                        self.assign_free_block()
-                            .ok_or(anyhow!("no more free blocks"))? as i32;
+                    let indirect_block_number = self
+                        .assign_free_block()
+                        .ok_or(anyhow!("no more free blocks"))?;
 
-                    // todo: maybe ensure that that block is just zeroes
+                    self.storage
+                        .write_block(indirect_block_number, [0; BLOCK_SIZE])?;
+
+                    inode.indirect = indirect_block_number as i32;
 
                     [0; NUM_INDIRECT]
                 }
