@@ -145,7 +145,20 @@ impl Filesystem for Yfs {
             return;
         };
 
-        attr.size = size.unwrap_or(attr.size);
+        if let Some(new_size) = size {
+            let Ok(mut inode) = self.yfs_disk.read_inode(ino as InodeNumber) else {
+                reply.error(ENOENT);
+                return;
+            };
+
+            inode.size = new_size as i32;
+            let Ok(_) = self.yfs_disk.write_inode(ino as InodeNumber, inode) else {
+                reply.error(ENOENT);
+                return;
+            };
+
+            attr.size = new_size;
+        }
 
         attr.atime = atime
             .map(|t| match t {
