@@ -20,6 +20,9 @@ pub const NUM_DIRECT: usize = 12;
 pub const NUM_INDIRECT: usize = BLOCK_SIZE / 4;
 
 pub const FS_HEADER_BLOCK_NUMBER: usize = 1;
+pub const FS_HEADER_SIZE: usize = INODE_SIZE;
+
+pub const INODE_START_POSITION: usize = BOOT_SECTOR_SIZE + FS_HEADER_SIZE;
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 #[repr(C)]

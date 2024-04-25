@@ -262,19 +262,12 @@ impl Filesystem for Yfs {
             return;
         };
 
-        // we're careful to read the inode *after* the write
-        let Ok(inode) = self.yfs_disk.read_inode(inum) else {
-            reply.error(EINVAL);
-            return;
-        };
-
-        let Some(attr) = &mut self.attributes[ino as usize] else {
+        let Ok(attr) = Self::inode_to_attr(&self.yfs_disk, inum) else {
             reply.error(ENOENT);
             return;
         };
 
-        attr.size = inode.size as u64;
-        attr.blocks = inode.size.div_ceil(BLOCK_SIZE as i32) as u64;
+        self.attributes[ino as usize] = Some(attr);
 
         reply.written(write_len as u32);
     }

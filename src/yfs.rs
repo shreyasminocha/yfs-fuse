@@ -6,8 +6,8 @@ use bitvec::vec::BitVec;
 use log::{info, warn};
 
 use crate::disk_format::{
-    DirectoryEntry, FileSystemHeader, Inode, InodeType, BLOCK_SIZE, BOOT_SECTOR_SIZE,
-    FS_HEADER_BLOCK_NUMBER, INODE_SIZE, NUM_DIRECT, NUM_INDIRECT,
+    DirectoryEntry, FileSystemHeader, Inode, InodeType, BLOCK_SIZE, FS_HEADER_BLOCK_NUMBER,
+    INODE_SIZE, INODE_START_POSITION, NUM_DIRECT, NUM_INDIRECT,
 };
 use crate::fs::{OwnershipMetadata, TimeMetadata};
 
@@ -79,7 +79,7 @@ impl YfsDisk {
             bail!("invalid inode number");
         }
 
-        let position = BOOT_SECTOR_SIZE + (inum as usize * INODE_SIZE);
+        let position = INODE_START_POSITION + ((inum - 1) as usize * INODE_SIZE);
         let block_number = position / BLOCK_SIZE;
         let offset = position % BLOCK_SIZE;
 
@@ -96,7 +96,7 @@ impl YfsDisk {
 
         let inode_serialized = bincode::serialize(&inode).context("serializing inode")?;
 
-        let position = BOOT_SECTOR_SIZE + (inum as usize * INODE_SIZE);
+        let position = INODE_START_POSITION + ((inum - 1) as usize * INODE_SIZE);
         let block_number = position / BLOCK_SIZE;
         let offset = position % BLOCK_SIZE;
 
