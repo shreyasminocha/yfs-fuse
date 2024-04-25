@@ -114,7 +114,12 @@ impl YfsDisk {
 
         let mut cursor = &contents[..];
         let mut entries = vec![];
-        while let Ok(entry) = bincode::deserialize_from(&mut cursor) {
+        while let Ok(entry) = bincode::deserialize_from::<_, DirectoryEntry>(&mut cursor) {
+            // "free directory entry"
+            if entry.inum == 0 {
+                continue;
+            }
+
             entries.push(entry);
         }
 
