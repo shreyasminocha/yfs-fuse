@@ -18,7 +18,7 @@ pub struct Yfs {
 
 impl Yfs {
     pub fn new(yfs_disk: YfsDisk) -> Result<Yfs> {
-        let mut attributes = vec![];
+        let mut attributes = vec![None];
 
         for inum in 1..=yfs_disk.num_inodes {
             let inode = yfs_disk.read_inode(inum as u16)?;
