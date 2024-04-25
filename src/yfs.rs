@@ -126,7 +126,7 @@ impl YfsDisk {
 
         let inode = self.read_inode(inum)?;
 
-        let end = offset + size;
+        let end = (offset + size).min(inode.size as usize);
 
         let mut data = vec![];
         let mut position = offset;
