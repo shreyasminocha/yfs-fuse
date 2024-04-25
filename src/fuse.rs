@@ -8,34 +8,34 @@ use std::ffi::OsStr;
 use std::time::SystemTime;
 
 use crate::disk_format::{InodeType, BLOCK_SIZE};
-use crate::yfs::{InodeNumber, YfsDisk};
+use crate::yfs::{InodeNumber, Yfs};
 
-pub struct Yfs {
-    yfs_disk: YfsDisk,
+pub struct YfsFs {
+    yfs: Yfs,
     attributes: Vec<Option<fuser::FileAttr>>,
     first_free_handle: u64,
 }
 
-impl Yfs {
-    pub fn new(yfs_disk: YfsDisk) -> Result<Yfs> {
+impl YfsFs {
+    pub fn new(yfs: Yfs) -> Result<YfsFs> {
         let mut attributes = vec![None];
 
-        for inum in 1..=yfs_disk.num_inodes {
-            let inode = yfs_disk.read_inode(inum as u16)?;
+        for inum in 1..=yfs.num_inodes {
+            let inode = yfs.read_inode(inum as u16)?;
 
             if inode.type_ == InodeType::Free {
                 debug!("free inode #{inum}");
 
                 // todo: remove temporary hack
                 // attributes.push(None);
-                attributes.push(Some(Self::inode_to_attr(&yfs_disk, inum as InodeNumber)?));
+                attributes.push(Some(Self::inode_to_attr(&yfs, inum as InodeNumber)?));
             } else {
-                attributes.push(Some(Self::inode_to_attr(&yfs_disk, inum as InodeNumber)?));
+                attributes.push(Some(Self::inode_to_attr(&yfs, inum as InodeNumber)?));
             }
         }
 
-        Ok(Yfs {
-            yfs_disk,
+        Ok(YfsFs {
+            yfs,
             attributes,
             first_free_handle: 0,
         })
@@ -44,11 +44,11 @@ impl Yfs {
     /// Converts an inode to a fuse FileAttr.
     ///
     /// Sets uid and gid to 0. Sets permissions to 755.
-    fn inode_to_attr(yfs_disk: &YfsDisk, inum: InodeNumber) -> Result<fuser::FileAttr> {
-        let inode = yfs_disk.read_inode(inum)?;
+    fn inode_to_attr(yfs: &Yfs, inum: InodeNumber) -> Result<fuser::FileAttr> {
+        let inode = yfs.read_inode(inum)?;
 
-        let time_metadata = yfs_disk.time_metadata().unwrap_or_default();
-        let ownership_metadata = yfs_disk.ownership_metadata().unwrap_or_default();
+        let time_metadata = yfs.time_metadata().unwrap_or_default();
+        let ownership_metadata = yfs.ownership_metadata().unwrap_or_default();
 
         Ok(fuser::FileAttr {
             ino: inum as u64,
@@ -76,14 +76,14 @@ impl Yfs {
     }
 }
 
-impl Filesystem for Yfs {
+impl Filesystem for YfsFs {
     fn lookup(&mut self, _req: &Request, parent: u64, name: &OsStr, reply: ReplyEntry) {
         let Ok(parent_inum) = parent.try_into() else {
             reply.error(EINVAL);
             return;
         };
 
-        let Ok(entries) = self.yfs_disk.read_directory(parent_inum) else {
+        let Ok(entries) = self.yfs.read_directory(parent_inum) else {
             reply.error(ENOENT);
             return;
         };
@@ -146,13 +146,13 @@ impl Filesystem for Yfs {
         };
 
         if let Some(new_size) = size {
-            let Ok(mut inode) = self.yfs_disk.read_inode(ino as InodeNumber) else {
+            let Ok(mut inode) = self.yfs.read_inode(ino as InodeNumber) else {
                 reply.error(ENOENT);
                 return;
             };
 
             inode.size = new_size as i32;
-            let Ok(_) = self.yfs_disk.write_inode(ino as InodeNumber, inode) else {
+            let Ok(_) = self.yfs.write_inode(ino as InodeNumber, inode) else {
                 reply.error(ENOENT);
                 return;
             };
@@ -193,10 +193,7 @@ impl Filesystem for Yfs {
             return;
         };
 
-        let Ok(data) = self
-            .yfs_disk
-            .read_file(inum, offset as usize, size as usize)
-        else {
+        let Ok(data) = self.yfs.read_file(inum, offset as usize, size as usize) else {
             reply.error(ENOENT);
             return;
         };
@@ -217,7 +214,7 @@ impl Filesystem for Yfs {
             return;
         };
 
-        let Ok(entries) = self.yfs_disk.read_directory(inum) else {
+        let Ok(entries) = self.yfs.read_directory(inum) else {
             reply.error(ENOENT);
             return;
         };
@@ -228,7 +225,7 @@ impl Filesystem for Yfs {
                 return;
             };
 
-            let Ok(entry_inode) = self.yfs_disk.read_inode(entry_inum) else {
+            let Ok(entry_inode) = self.yfs.read_inode(entry_inum) else {
                 reply.error(ENOENT);
                 return;
             };
@@ -270,12 +267,12 @@ impl Filesystem for Yfs {
             return;
         };
 
-        let Ok(write_len) = self.yfs_disk.write_file(inum, offset as usize, data) else {
+        let Ok(write_len) = self.yfs.write_file(inum, offset as usize, data) else {
             reply.error(ENOENT);
             return;
         };
 
-        let Ok(attr) = Self::inode_to_attr(&self.yfs_disk, inum) else {
+        let Ok(attr) = Self::inode_to_attr(&self.yfs, inum) else {
             reply.error(ENOENT);
             return;
         };

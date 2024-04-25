@@ -14,98 +14,68 @@ use crate::fs::{OwnershipMetadata, TimeMetadata};
 // inode numbers are represented as `i16`s on the disk, but we use `u16`s for logical accuracy
 pub type InodeNumber = u16;
 
+// block numbers are represented as `132`s on the disk, but we use `usize`s to avoid littering
+// the code with casts.
+type BlockNumber = usize;
+
 type Block = [u8; BLOCK_SIZE];
 
-pub struct YfsDisk {
+pub struct Yfs {
     pub file: File,
     pub num_blocks: usize,
     pub num_inodes: usize,
     pub block_bitmap: BitVec,
 }
 
-impl YfsDisk {
+impl Yfs {
     pub fn from_file(file: File) -> Result<Self> {
-        let mut yfs_disk = Self {
+        let mut yfs = Self {
             file,
             num_blocks: FS_HEADER_BLOCK_NUMBER,
             num_inodes: 0,
             block_bitmap: BitVec::new(),
         };
 
-        let header_block = yfs_disk.get_block(FS_HEADER_BLOCK_NUMBER)?;
+        let header_block = yfs.read_block(FS_HEADER_BLOCK_NUMBER)?;
 
         let header: FileSystemHeader =
             bincode::deserialize(&header_block).context("unable to parse disk header")?;
 
-        yfs_disk.num_blocks = header.num_blocks as usize;
-        yfs_disk.num_inodes = header.num_inodes as usize;
+        yfs.num_blocks = header.num_blocks as usize;
+        yfs.num_inodes = header.num_inodes as usize;
 
-        info!("{} total blocks", yfs_disk.num_blocks);
-        info!("{} total inodes", yfs_disk.num_inodes);
+        info!("{} total blocks", yfs.num_blocks);
+        info!("{} total inodes", yfs.num_inodes);
 
-        yfs_disk.block_bitmap.resize(yfs_disk.num_blocks, false);
+        yfs.block_bitmap.resize(yfs.num_blocks, false);
 
         // block numbers are one-indexed. sector zero is the boot sector.
-        yfs_disk.block_bitmap.set(0, true);
+        yfs.block_bitmap.set(0, true);
 
         // the first block is the header block
         // the next few blocks are blocks full of inodes
-        let last_inode_block = 1 + yfs_disk.num_inodes.div_ceil(BLOCK_SIZE / INODE_SIZE);
+        let last_inode_block = 1 + yfs.num_inodes.div_ceil(BLOCK_SIZE / INODE_SIZE);
         for b in 1..=last_inode_block {
-            yfs_disk.block_bitmap.set(b, true);
+            yfs.block_bitmap.set(b, true);
         }
 
-        for inum in 1..=yfs_disk.num_inodes {
-            let inode = yfs_disk.read_inode(inum as u16)?;
+        for inum in 1..=yfs.num_inodes {
+            let inode = yfs.read_inode(inum as u16)?;
             if inode.type_ == InodeType::Free {
                 continue;
             }
 
-            let block_numbers = yfs_disk.get_inode_allocated_block_numbers(inode)?;
+            let block_numbers = yfs.get_inode_allocated_block_numbers(inode)?;
             for block_number in block_numbers {
-                yfs_disk.block_bitmap.set(block_number, true);
+                yfs.block_bitmap.set(block_number, true);
             }
 
             if inode.indirect != 0 {
-                yfs_disk.block_bitmap.set(inode.indirect as usize, true);
+                yfs.block_bitmap.set(inode.indirect as BlockNumber, true);
             }
         }
 
-        Ok(yfs_disk)
-    }
-
-    pub fn read_inode(&self, inum: InodeNumber) -> Result<Inode> {
-        if inum == 0 {
-            bail!("invalid inode number");
-        }
-
-        let position = INODE_START_POSITION + ((inum - 1) as usize * INODE_SIZE);
-        let block_number = position / BLOCK_SIZE;
-        let offset = position % BLOCK_SIZE;
-
-        let block = self.get_block(block_number)?;
-        let inode = &block[offset..offset + INODE_SIZE];
-
-        bincode::deserialize(inode).context("parsing inode")
-    }
-
-    pub fn write_inode(&self, inum: InodeNumber, inode: Inode) -> Result<()> {
-        if inum == 0 {
-            bail!("invalid inode number");
-        }
-
-        let inode_serialized = bincode::serialize(&inode).context("serializing inode")?;
-
-        let position = INODE_START_POSITION + ((inum - 1) as usize * INODE_SIZE);
-        let block_number = position / BLOCK_SIZE;
-        let offset = position % BLOCK_SIZE;
-
-        let mut block = self.get_block(block_number)?;
-        block[offset..offset + INODE_SIZE].copy_from_slice(&inode_serialized);
-
-        self.write_block(block_number, block)?;
-
-        Ok(())
+        Ok(yfs)
     }
 
     pub fn read_directory(&self, inum: InodeNumber) -> Result<Vec<DirectoryEntry>> {
@@ -115,8 +85,8 @@ impl YfsDisk {
         let mut cursor = &contents[..];
         let mut entries = vec![];
         while let Ok(entry) = bincode::deserialize_from::<_, DirectoryEntry>(&mut cursor) {
-            // "free directory entry"
             if entry.inum == 0 {
+                // "free directory entry"
                 continue;
             }
 
@@ -142,7 +112,7 @@ impl YfsDisk {
             let end_position = block_end.min(end);
 
             let block_index = position / BLOCK_SIZE;
-            let Ok(block) = self.get_file_block(inode, block_index) else {
+            let Ok(block) = self.read_file_block(inode, block_index) else {
                 // the requested read size can sometimes be bigger than the file size
                 // in such a case, we want to fail gracefully
                 break;
@@ -179,7 +149,7 @@ impl YfsDisk {
             let end_position = block_end.min(end);
 
             let block_index = position / BLOCK_SIZE;
-            let mut block = self.get_file_block(inode, block_index)?;
+            let mut block = self.read_file_block(inode, block_index)?;
 
             block[start_offset..end_position - block_start]
                 .copy_from_slice(&data[(position - offset)..(end_position - offset)]);
@@ -195,6 +165,40 @@ impl YfsDisk {
 
         info!("[inode #{inum}] wrote {write_len} bytes");
         Ok(write_len)
+    }
+
+    pub fn read_inode(&self, inum: InodeNumber) -> Result<Inode> {
+        if inum == 0 {
+            bail!("invalid inode number");
+        }
+
+        let position = INODE_START_POSITION + ((inum - 1) as usize * INODE_SIZE);
+        let block_number = position / BLOCK_SIZE;
+        let offset = position % BLOCK_SIZE;
+
+        let block = self.read_block(block_number)?;
+        let inode = &block[offset..offset + INODE_SIZE];
+
+        bincode::deserialize(inode).context("parsing inode")
+    }
+
+    pub fn write_inode(&self, inum: InodeNumber, inode: Inode) -> Result<()> {
+        if inum == 0 {
+            bail!("invalid inode number");
+        }
+
+        let inode_serialized = bincode::serialize(&inode).context("serializing inode")?;
+
+        let position = INODE_START_POSITION + ((inum - 1) as usize * INODE_SIZE);
+        let block_number = position / BLOCK_SIZE;
+        let offset = position % BLOCK_SIZE;
+
+        let mut block = self.read_block(block_number)?;
+        block[offset..offset + INODE_SIZE].copy_from_slice(&inode_serialized);
+
+        self.write_block(block_number, block)?;
+
+        Ok(())
     }
 
     pub fn time_metadata(&self) -> Result<TimeMetadata> {
@@ -279,7 +283,7 @@ impl YfsDisk {
                 .collect::<Vec<_>>()
                 .try_into()
                 .expect("NUM_INDIRECT = BLOCK_SIZE / 4. So, NUM_INDIRECT * 4 == BLOCK_SIZE");
-            self.write_block(inode.indirect as usize, indirect_block)?;
+            self.write_block(inode.indirect as BlockNumber, indirect_block)?;
         }
 
         // update the inode with the new direct/indirect blocks
@@ -288,10 +292,10 @@ impl YfsDisk {
         Ok(())
     }
 
-    /// Gets the contents of the request block number of the inode.
-    fn get_file_block(&self, inode: Inode, n: usize) -> Result<Block> {
+    /// Reads the contents of the request block number of the inode.
+    fn read_file_block(&self, inode: Inode, n: usize) -> Result<Block> {
         let block_number = self.get_file_block_number(inode, n)?;
-        self.get_block(block_number)
+        self.read_block(block_number)
     }
 
     fn write_file_block(&self, inode: Inode, n: usize, block: Block) -> Result<()> {
@@ -299,7 +303,7 @@ impl YfsDisk {
         self.write_block(block_number, block)
     }
 
-    fn get_file_block_number(&self, inode: Inode, n: usize) -> Result<usize> {
+    fn get_file_block_number(&self, inode: Inode, n: usize) -> Result<BlockNumber> {
         if n > NUM_DIRECT + NUM_INDIRECT {
             bail!("block index exceeds maximum block count");
         }
@@ -311,29 +315,7 @@ impl YfsDisk {
             .ok_or(anyhow!("block index exceeds allocated block count"))?)
     }
 
-    fn get_block(&self, block_number: usize) -> Result<Block> {
-        let mut buf = [0; BLOCK_SIZE];
-        let position = block_number * BLOCK_SIZE;
-
-        self.file
-            .read_at(&mut buf, position as u64)
-            .context("reading requested block")?;
-
-        Ok(buf)
-    }
-
-    fn write_block(&self, block_number: usize, block: Block) -> Result<()> {
-        let position = block_number * BLOCK_SIZE;
-
-        // todo: deal with short writes
-        self.file
-            .write_at(&block, position as u64)
-            .context("writing block")?;
-
-        Ok(())
-    }
-
-    fn get_inode_allocated_block_numbers(&self, inode: Inode) -> Result<Vec<usize>> {
+    fn get_inode_allocated_block_numbers(&self, inode: Inode) -> Result<Vec<BlockNumber>> {
         let direct_blocks = inode
             .direct
             .into_iter()
@@ -355,20 +337,23 @@ impl YfsDisk {
         Ok([direct_blocks, indirect_blocks].concat())
     }
 
-    fn get_indirect_block_numbers(&self, inode: Inode) -> Result<Option<[usize; NUM_INDIRECT]>> {
-        let indirect_block_number: usize = inode
+    fn get_indirect_block_numbers(
+        &self,
+        inode: Inode,
+    ) -> Result<Option<[BlockNumber; NUM_INDIRECT]>> {
+        let indirect_block_number: BlockNumber = inode
             .indirect
             .try_into()
-            .context("converting block number to usize")?;
+            .context("converting block number to BlockNumber")?;
 
         if indirect_block_number == 0 {
             return Ok(None);
         }
 
         let indirect_blocks = self
-            .get_block(indirect_block_number)?
+            .read_block(indirect_block_number)?
             .array_chunks::<4>()
-            .map(|b| u32::from_le_bytes(*b) as usize)
+            .map(|b| u32::from_le_bytes(*b) as BlockNumber)
             .collect::<Vec<_>>()
             .try_into()
             .expect("NUM_DIRECT is defined as BLOCK_SIZE divided by 4");
@@ -376,7 +361,29 @@ impl YfsDisk {
         Ok(Some(indirect_blocks))
     }
 
-    fn assign_free_block(&mut self) -> Option<usize> {
+    fn read_block(&self, block_number: BlockNumber) -> Result<Block> {
+        let mut buf = [0; BLOCK_SIZE];
+        let position = block_number * BLOCK_SIZE;
+
+        self.file
+            .read_at(&mut buf, position as u64)
+            .context("reading requested block")?;
+
+        Ok(buf)
+    }
+
+    fn write_block(&self, block_number: BlockNumber, block: Block) -> Result<()> {
+        let position = block_number * BLOCK_SIZE;
+
+        // todo: deal with short writes
+        self.file
+            .write_at(&block, position as u64)
+            .context("writing block")?;
+
+        Ok(())
+    }
+
+    fn assign_free_block(&mut self) -> Option<BlockNumber> {
         let assigned = self.block_bitmap.first_zero();
 
         if let Some(block) = assigned {

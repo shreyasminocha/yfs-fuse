@@ -4,8 +4,8 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use clap::Parser;
 
-use yfs::fuse::Yfs;
-use yfs::yfs::YfsDisk;
+use yfs::fuse::YfsFs;
+use yfs::yfs::Yfs;
 
 #[derive(Parser)]
 struct Args {
@@ -27,10 +27,10 @@ fn main() -> Result<()> {
         .open(disk_file_path)
         .context("unable to open disk file in read-write mode")?;
 
-    let yfs = YfsDisk::from_file(disk_file)?;
+    let yfs = Yfs::from_file(disk_file)?;
 
     let mountpoint = args.mountpoint;
-    fuser::mount2(Yfs::new(yfs)?, mountpoint, &[]).unwrap();
+    fuser::mount2(YfsFs::new(yfs)?, mountpoint, &[]).unwrap();
 
     Ok(())
 }
