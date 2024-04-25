@@ -7,16 +7,17 @@ use std::ffi::OsStr;
 use std::time::SystemTime;
 
 use crate::disk_format::{InodeType, BLOCK_SIZE};
+use crate::storage::YfsStorage;
 use crate::yfs::{InodeNumber, Yfs};
 
-pub struct YfsFs {
-    yfs: Yfs,
+pub struct YfsFs<S: YfsStorage> {
+    yfs: Yfs<S>,
     attributes: Vec<Option<fuser::FileAttr>>,
     first_free_handle: u64,
 }
 
-impl YfsFs {
-    pub fn new(yfs: Yfs) -> Result<YfsFs> {
+impl<S: YfsStorage> YfsFs<S> {
+    pub fn new(yfs: Yfs<S>) -> Result<YfsFs<S>> {
         let mut attributes = vec![None];
 
         for inum in 1..=yfs.num_inodes {
@@ -39,11 +40,11 @@ impl YfsFs {
     /// Converts an inode to a fuse FileAttr.
     ///
     /// Sets uid and gid to 0. Sets permissions to 755.
-    fn inode_to_attr(yfs: &Yfs, inum: InodeNumber) -> Result<fuser::FileAttr> {
+    fn inode_to_attr(yfs: &Yfs<S>, inum: InodeNumber) -> Result<fuser::FileAttr> {
         let inode = yfs.read_inode(inum)?;
 
-        let time_metadata = yfs.time_metadata().unwrap_or_default();
-        let ownership_metadata = yfs.ownership_metadata().unwrap_or_default();
+        let time_metadata = yfs.storage.time_metadata().unwrap_or_default();
+        let ownership_metadata = yfs.storage.ownership_metadata().unwrap_or_default();
 
         Ok(fuser::FileAttr {
             ino: inum as u64,
@@ -70,7 +71,7 @@ impl YfsFs {
     }
 }
 
-impl Filesystem for YfsFs {
+impl<S: YfsStorage> Filesystem for YfsFs<S> {
     fn lookup(&mut self, _req: &Request, parent: u64, name: &OsStr, reply: ReplyEntry) {
         let Ok(parent_inum) = parent.try_into() else {
             reply.error(EINVAL);

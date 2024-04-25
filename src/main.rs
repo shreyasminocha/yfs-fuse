@@ -5,6 +5,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 
 use yfs::fuse::YfsFs;
+use yfs::storage::FileBackedStorage;
 use yfs::yfs::Yfs;
 
 #[derive(Parser)]
@@ -27,7 +28,7 @@ fn main() -> Result<()> {
         .open(disk_file_path)
         .context("unable to open disk file in read-write mode")?;
 
-    let yfs = Yfs::from_file(disk_file)?;
+    let yfs = Yfs::new(FileBackedStorage::new(disk_file))?;
 
     let mountpoint = args.mountpoint;
     fuser::mount2(YfsFs::new(yfs)?, mountpoint, &[]).unwrap();
