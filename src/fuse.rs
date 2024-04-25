@@ -3,7 +3,6 @@ use fuser::{
     FileType, Filesystem, ReplyAttr, ReplyData, ReplyDirectory, ReplyEntry, Request, TimeOrNow,
 };
 use libc::{EINVAL, ENOENT};
-use log::debug;
 use std::ffi::OsStr;
 use std::time::SystemTime;
 
@@ -24,11 +23,7 @@ impl YfsFs {
             let inode = yfs.read_inode(inum as u16)?;
 
             if inode.type_ == InodeType::Free {
-                debug!("free inode #{inum}");
-
-                // todo: remove temporary hack
-                // attributes.push(None);
-                attributes.push(Some(Self::inode_to_attr(&yfs, inum as InodeNumber)?));
+                attributes.push(None);
             } else {
                 attributes.push(Some(Self::inode_to_attr(&yfs, inum as InodeNumber)?));
             }
@@ -61,8 +56,7 @@ impl YfsFs {
             kind: match inode.type_ {
                 InodeType::Directory => FileType::Directory,
                 InodeType::Regular => FileType::RegularFile,
-                // todo: remove temporary hack
-                InodeType::Free => FileType::RegularFile,
+                InodeType::Free => panic!("attempted to generate attributes for free inode"),
                 _ => unreachable!(),
             },
             perm: 0o755,
