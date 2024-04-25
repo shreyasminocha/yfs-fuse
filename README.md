@@ -10,7 +10,7 @@ Note: the code is currently poorly documented and missing tests.
 - [x] reading files
 - [ ] creating files
 - [ ] deleting files
-- [x] writing files (buggy)
+- [x] writing files
 - [ ] symlinks
 - [ ] …
 

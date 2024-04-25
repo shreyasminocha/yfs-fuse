@@ -148,7 +148,7 @@ impl YfsDisk {
                 break;
             };
 
-            data.extend_from_slice(&block[start_offset..end_position - position]);
+            data.extend_from_slice(&block[start_offset..end_position - block_start]);
 
             position = end_position;
         }
@@ -181,12 +181,12 @@ impl YfsDisk {
             let block_index = position / BLOCK_SIZE;
             let mut block = self.get_file_block(inode, block_index)?;
 
-            block[start_offset..end_position - position]
-                .copy_from_slice(&data[position..end_position]);
+            block[start_offset..end_position - block_start]
+                .copy_from_slice(&data[(position - offset)..(end_position - offset)]);
 
             self.write_file_block(inode, block_index, block)?;
 
-            write_len += (end_position - position) - start_offset;
+            write_len += end_position - position;
             position = end_position;
         }
 
