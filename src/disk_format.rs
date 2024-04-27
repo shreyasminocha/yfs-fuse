@@ -61,7 +61,7 @@ pub enum InodeType {
 pub struct FileSystemHeader {
     pub num_blocks: i32,
     pub num_inodes: i32,
-    pub padding: [u8; 14],
+    pub padding: [i32; 14],
 }
 
 #[derive(Debug, Deserialize)]
