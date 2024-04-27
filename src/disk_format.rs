@@ -24,6 +24,8 @@ pub const FS_HEADER_SIZE: usize = INODE_SIZE;
 
 pub const INODE_START_POSITION: usize = BOOT_SECTOR_SIZE + FS_HEADER_SIZE;
 
+pub const INODES_PER_BLOCK: usize = BLOCK_SIZE / INODE_SIZE;
+
 pub type Block = [u8; BLOCK_SIZE];
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]

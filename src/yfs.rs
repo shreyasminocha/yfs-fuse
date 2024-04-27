@@ -4,7 +4,7 @@ use log::{info, warn};
 
 use crate::disk_format::{
     Block, DirectoryEntry, FileSystemHeader, Inode, InodeType, BLOCK_SIZE, FS_HEADER_BLOCK_NUMBER,
-    INODE_SIZE, INODE_START_POSITION, NUM_DIRECT, NUM_INDIRECT,
+    INODES_PER_BLOCK, INODE_SIZE, INODE_START_POSITION, NUM_DIRECT, NUM_INDIRECT,
 };
 use crate::storage::YfsStorage;
 
@@ -44,12 +44,12 @@ impl<S: YfsStorage> Yfs<S> {
 
         yfs.block_bitmap.resize(yfs.num_blocks, false);
 
-        // block numbers are one-indexed. sector zero is the boot sector.
+        // sector/block zero is the boot sector.
         yfs.block_bitmap.set(0, true);
 
-        // the first block is the header block
-        // the next few blocks are blocks full of inodes
-        let last_inode_block = 1 + yfs.num_inodes.div_ceil(BLOCK_SIZE / INODE_SIZE);
+        // the first INODE_SIZE bytes of the first inode block are occupied by the
+        // file system header
+        let last_inode_block = (yfs.num_inodes + 1).div_ceil(INODES_PER_BLOCK);
         for b in 1..=last_inode_block {
             yfs.block_bitmap.set(b, true);
         }
