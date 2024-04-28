@@ -9,6 +9,8 @@ use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 use serde_repr::{Deserialize_repr, Serialize_repr};
 
+use crate::yfs::InodeNumber;
+
 /// size of a disk sector in bytes
 const SECTOR_SIZE: usize = 512;
 
@@ -30,6 +32,12 @@ pub const FS_HEADER_SIZE: usize = INODE_SIZE;
 pub const INODE_START_POSITION: usize = BOOT_SECTOR_SIZE + FS_HEADER_SIZE;
 
 pub const INODES_PER_BLOCK: usize = BLOCK_SIZE / INODE_SIZE;
+
+pub const ROOT_INODE: InodeNumber = 1;
+
+pub const DIRECTORY_ENTRY_SIZE: usize = 32;
+
+pub const MAX_FILE_SIZE: usize = (NUM_DIRECT + NUM_INDIRECT) * BLOCK_SIZE;
 
 pub type Block = [u8; BLOCK_SIZE];
 
@@ -89,7 +97,7 @@ impl DirectoryEntry {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DirectoryName([u8; 30]);
 
 impl TryFrom<&CStr> for DirectoryName {

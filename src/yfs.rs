@@ -1,10 +1,14 @@
+use std::collections::{HashMap, HashSet};
+use std::ffi::{CStr, CString};
+
 use anyhow::{anyhow, bail, Context, Result};
 use bitvec::vec::BitVec;
 use log::{info, warn};
 
 use crate::disk_format::{
-    Block, DirectoryEntry, FileSystemHeader, Inode, InodeType, BLOCK_SIZE, FS_HEADER_BLOCK_NUMBER,
-    INODES_PER_BLOCK, INODE_SIZE, INODE_START_POSITION, NUM_DIRECT, NUM_INDIRECT,
+    Block, DirectoryEntry, DirectoryName, FileSystemHeader, Inode, InodeType, BLOCK_SIZE,
+    DIRECTORY_ENTRY_SIZE, FS_HEADER_BLOCK_NUMBER, INODES_PER_BLOCK, INODE_SIZE,
+    INODE_START_POSITION, MAX_FILE_SIZE, NUM_DIRECT, NUM_INDIRECT, ROOT_INODE,
 };
 use crate::storage::YfsStorage;
 
@@ -36,11 +40,29 @@ impl<S: YfsStorage> Yfs<S> {
         let header: FileSystemHeader =
             bincode::deserialize(&header_block).context("unable to parse disk header")?;
 
+        if header.num_blocks < 2 {
+            // we need at least the boot sector and the fs header
+            bail!("invalid number of blocks: {}", header.num_blocks);
+        }
+
+        if header.num_inodes < 1 {
+            // we need at least the root inode
+            bail!("invalid number of inodes: {}", header.num_inodes);
+        }
+
+        if header.num_blocks < (header.num_inodes + 1).div_ceil(INODES_PER_BLOCK as i32) {
+            bail!("not enough blocks to store inodes");
+        }
+
         yfs.num_blocks = header.num_blocks as usize;
         yfs.num_inodes = header.num_inodes as usize;
 
         info!("{} total blocks", yfs.num_blocks);
         info!("{} total inodes", yfs.num_inodes);
+
+        // check that the first and last blocks are accessible
+        let _ = yfs.storage.read_block(0)?;
+        let _ = yfs.storage.read_block(yfs.num_blocks - 1)?;
 
         yfs.block_bitmap.resize(yfs.num_blocks, false);
 
@@ -56,19 +78,56 @@ impl<S: YfsStorage> Yfs<S> {
 
         for inum in 1..=yfs.num_inodes {
             let inode = yfs.read_inode(inum as u16)?;
+
             if inode.type_ == InodeType::Free {
+                if !yfs.get_inode_allocated_block_numbers(inode)?.is_empty() {
+                    warn!("free inode has allocated blocks");
+                }
+
                 continue;
             }
 
             let block_numbers = yfs.get_inode_allocated_block_numbers(inode)?;
             for block_number in block_numbers {
+                if block_number >= yfs.num_blocks {
+                    bail!("invalid block number: {block_number}");
+                }
+
+                if block_number <= last_inode_block {
+                    bail!("block is used by inodes");
+                }
+
+                if yfs.block_bitmap[block_number] {
+                    bail!("block number {block_number} is already allocated");
+                }
+
                 yfs.block_bitmap.set(block_number, true);
             }
 
             if inode.indirect != 0 {
-                yfs.block_bitmap.set(inode.indirect as BlockNumber, true);
+                let indirect_block_number = inode.indirect as BlockNumber;
+
+                if inode.indirect < 0 || indirect_block_number >= yfs.num_blocks {
+                    bail!("invalid block number: {}", inode.indirect);
+                }
+
+                if indirect_block_number <= last_inode_block {
+                    bail!("block number {} is used by inodes", indirect_block_number);
+                }
+
+                if yfs.block_bitmap[indirect_block_number] {
+                    bail!(
+                        "block number {} is already allocated",
+                        indirect_block_number
+                    );
+                }
+
+                yfs.block_bitmap.set(indirect_block_number, true);
             }
         }
+
+        // check filesystem for consistency
+        yfs.check_filesystem()?;
 
         Ok(yfs)
     }
@@ -77,11 +136,17 @@ impl<S: YfsStorage> Yfs<S> {
         let inode = self.read_inode(inum)?;
         let contents = self.read_file(inum, 0, inode.size as usize)?;
 
-        let mut cursor = &contents[..];
         let mut entries = vec![];
-        while let Ok(entry) = bincode::deserialize_from::<_, DirectoryEntry>(&mut cursor) {
+
+        for chunk in contents.chunks_exact(DIRECTORY_ENTRY_SIZE) {
+            let entry: DirectoryEntry = bincode::deserialize(chunk)?;
+
             if entry.inum == 0 {
                 // "free directory entry"
+                if entry.name != DirectoryName::default() {
+                    warn!("free directory entry has non-empty name");
+                }
+
                 continue;
             }
 
@@ -164,7 +229,7 @@ impl<S: YfsStorage> Yfs<S> {
 
     pub fn read_inode(&self, inum: InodeNumber) -> Result<Inode> {
         if inum == 0 {
-            bail!("invalid inode number");
+            bail!("invalid inode number: {inum}");
         }
 
         let position = INODE_START_POSITION + ((inum - 1) as usize * INODE_SIZE);
@@ -179,7 +244,7 @@ impl<S: YfsStorage> Yfs<S> {
 
     pub fn write_inode(&self, inum: InodeNumber, inode: Inode) -> Result<()> {
         if inum == 0 {
-            bail!("invalid inode number");
+            bail!("invalid inode number: {inum}");
         }
 
         let inode_serialized = bincode::serialize(&inode).context("serializing inode")?;
@@ -350,5 +415,189 @@ impl<S: YfsStorage> Yfs<S> {
         }
 
         assigned
+    }
+
+    /// Checks the filesystem for consistency. Performs a depth-first traversal of the directory
+    /// tree.
+    ///
+    /// Does not check for the validity of allocated blocks or block reuse. Some checks are
+    /// exclusively performed in [`Self::new`].
+    fn check_filesystem(&self) -> Result<()> {
+        let root_inode = self.read_inode(ROOT_INODE)?;
+        if root_inode.type_ != InodeType::Directory {
+            bail!("root inode does not represent a directory");
+        }
+
+        let mut queue = vec![ROOT_INODE];
+        let mut seen_directories = HashSet::<InodeNumber>::new();
+        let mut directory_parents = HashMap::from([(ROOT_INODE, ROOT_INODE)]);
+
+        const DOT: &CStr = c".";
+        const DOT_DOT: &CStr = c"..";
+
+        while let Some(inum) = queue.pop() {
+            let inode = self.read_inode(inum)?;
+            if inode.type_ == InodeType::Free {
+                bail!("directory tree includes free inode");
+            }
+
+            if inode.size < 0 {
+                bail!("invalid size in inode: {}", inode.size);
+            }
+
+            if inode.size as usize > MAX_FILE_SIZE {
+                bail!("size in inode is greater than the maximum valid file size");
+            }
+
+            if self.get_inode_allocated_block_numbers(inode)?.len()
+                < (inode.size as usize).div_ceil(BLOCK_SIZE)
+            {
+                bail!(
+                    "inode doesn't have enough blocks to store {} bytes",
+                    inode.size
+                );
+            }
+
+            if inode.type_ == InodeType::Directory {
+                if seen_directories.contains(&inum) {
+                    bail!("directory tree includes loop");
+                }
+
+                seen_directories.insert(inum);
+
+                let parent_inum = *directory_parents
+                    .get(&inum)
+                    .expect("this directory was discovered through the entries of some directory");
+
+                if inode.size as usize % DIRECTORY_ENTRY_SIZE != 0 {
+                    bail!(
+                        "directory size {} is not a multiple of the directory entry size",
+                        inode.size
+                    );
+                }
+
+                let mut entry_names: HashSet<CString> = HashSet::new();
+
+                for entry in self.read_directory(inum)? {
+                    if entry.inum < 0 || entry.inum as usize > self.num_inodes {
+                        bail!("invalid inode number in directory entry: {}", entry.inum);
+                    }
+
+                    let entry_inum = entry.inum as InodeNumber;
+                    let entry_name = CString::from(&entry.name);
+                    let entry_name = entry_name.as_c_str();
+
+                    if entry_names.contains(entry_name) {
+                        bail!("directory contains duplicate entry: {}", entry.name);
+                    }
+                    entry_names.insert(entry_name.to_owned());
+
+                    if entry_name == DOT && entry_inum != inum {
+                        bail!("'.' entry doesn't point to self");
+                    }
+
+                    if entry_name == DOT_DOT && entry_inum != parent_inum {
+                        bail!("'..' entry doesn't point to parent");
+                    }
+
+                    if entry_name == DOT || entry_name == DOT_DOT {
+                        // prevent these from interfering with operations for "regular" entries
+                        continue;
+                    }
+
+                    if entry_name == c"" {
+                        bail!("invalid directory entry name: \"\"");
+                    }
+
+                    let entry_inode = self.read_inode(entry_inum)?;
+                    if entry_inode.type_ == InodeType::Directory {
+                        directory_parents.insert(entry_inum, inum);
+                    }
+
+                    queue.push(entry.inum as InodeNumber);
+                }
+
+                if !entry_names.contains(DOT) {
+                    bail!("no '.' entry");
+                }
+
+                if !entry_names.contains(DOT_DOT) {
+                    bail!("no '..' entry");
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    mod validation {
+        #[test]
+        fn test_invalid_num_inodes() {}
+
+        #[test]
+        fn test_negative_num_blocks() {}
+
+        #[test]
+        fn test_invalid_direct_block_block() {}
+
+        #[test]
+        fn test_invalid_indirect_block_block() {}
+
+        #[test]
+        fn test_direct_block_pointing_to_inodes() {}
+
+        #[test]
+        fn test_indirect_block_pointing_to_inodes() {}
+
+        #[test]
+        fn test_doubly_allocated_block() {}
+
+        #[test]
+        fn test_inode_without_enough_blocks() {}
+
+        #[test]
+        fn test_inode_with_too_many_blocks() {}
+
+        #[test]
+        fn test_inode_with_negative_size() {}
+
+        #[test]
+        fn test_inode_with_size_exceeding_the_maximum() {}
+
+        #[test]
+        fn test_no_root_inode() {}
+
+        #[test]
+        fn test_non_directory_root_inode() {}
+
+        #[test]
+        fn test_directory_invalid_size() {}
+
+        #[test]
+        fn test_directory_invalid_entry_inum() {}
+
+        #[test]
+        fn test_directory_free_entry() {}
+
+        #[test]
+        fn test_directory_duplicate_entries() {}
+
+        #[test]
+        fn test_directory_no_dot() {}
+
+        #[test]
+        fn test_directory_invalid_dot() {}
+
+        #[test]
+        fn test_directory_no_dot_dot() {}
+
+        #[test]
+        fn test_directory_invalid_dot_dot() {}
+
+        #[test]
+        fn test_directory_loop() {}
     }
 }
