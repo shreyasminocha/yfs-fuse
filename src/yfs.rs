@@ -5,12 +5,18 @@ use anyhow::{anyhow, bail, Context, Result};
 use bitvec::vec::BitVec;
 use log::{info, warn};
 
-use crate::disk_format::{
-    Block, DirectoryEntry, DirectoryName, FileSystemHeader, Inode, InodeType, BLOCK_SIZE,
-    DIRECTORY_ENTRY_SIZE, FS_HEADER_BLOCK_NUMBER, INODES_PER_BLOCK, INODE_SIZE,
-    INODE_START_POSITION, MAX_FILE_SIZE, NUM_DIRECT, NUM_INDIRECT, ROOT_INODE,
+use crate::{
+    disk_format::{
+        block::{Block, BLOCK_SIZE},
+        directory_entry::{DirectoryEntry, DirectoryName, DIRECTORY_ENTRY_SIZE},
+        header::{FileSystemHeader, FS_HEADER_BLOCK_NUMBER},
+        inode::{
+            Inode, InodeType, INODES_PER_BLOCK, INODE_SIZE, INODE_START_POSITION, MAX_FILE_SIZE,
+            NUM_DIRECT, NUM_INDIRECT, ROOT_INODE,
+        },
+    },
+    storage::YfsStorage,
 };
-use crate::storage::YfsStorage;
 
 // inode numbers are represented as `i16`s on the disk, but we use `u16`s for logical accuracy
 pub type InodeNumber = u16;

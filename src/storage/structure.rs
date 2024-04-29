@@ -1,7 +1,11 @@
 use anyhow::{bail, Context, Result};
 
 use crate::{
-    disk_format::{Block, FileSystemHeader, Inode, BLOCK_SIZE, INODES_PER_BLOCK},
+    disk_format::{
+        block::{Block, BLOCK_SIZE},
+        header::FileSystemHeader,
+        inode::{Inode, INODES_PER_BLOCK},
+    },
     yfs::BlockNumber,
 };
 
@@ -91,7 +95,11 @@ fn serialize_inodes(inodes: &[Inode]) -> Result<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
-    use crate::disk_format::{InodeType, FS_HEADER_SIZE, INODE_SIZE, NUM_DIRECT};
+    use crate::disk_format::{
+        block::BLOCK_SIZE,
+        header::FS_HEADER_SIZE,
+        inode::{Inode, InodeType, INODES_PER_BLOCK, INODE_SIZE, NUM_DIRECT},
+    };
 
     use super::*;
 

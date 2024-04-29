@@ -1,6 +1,6 @@
 use anyhow::Result;
 
-use crate::disk_format::Block;
+use crate::disk_format::block::Block;
 use crate::metadata::{OwnershipMetadata, TimeMetadata};
 use crate::yfs::BlockNumber;
 

@@ -6,7 +6,7 @@ use libc::{EINVAL, ENOENT};
 use std::ffi::OsStr;
 use std::time::SystemTime;
 
-use crate::disk_format::{InodeType, BLOCK_SIZE};
+use crate::disk_format::{block::BLOCK_SIZE, inode::InodeType};
 use crate::storage::YfsStorage;
 use crate::yfs::{InodeNumber, Yfs};
 

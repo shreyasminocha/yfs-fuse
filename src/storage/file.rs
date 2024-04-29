@@ -4,7 +4,7 @@ use std::os::unix::prelude::FileExt;
 
 use anyhow::{Context, Result};
 
-use crate::disk_format::{Block, BLOCK_SIZE};
+use crate::disk_format::block::{Block, BLOCK_SIZE};
 use crate::metadata::{OwnershipMetadata, TimeMetadata};
 use crate::yfs::BlockNumber;
 
