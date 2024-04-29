@@ -3,8 +3,9 @@ use fuser::{
     FileType, Filesystem, ReplyAttr, ReplyData, ReplyDirectory, ReplyEntry, Request, TimeOrNow,
 };
 use libc::{EINVAL, ENOENT};
-use std::ffi::OsStr;
-use std::time::SystemTime;
+use std::ffi::{CString, OsStr};
+use std::os::unix::ffi::OsStrExt;
+use std::time::{Duration, SystemTime};
 
 use crate::disk_format::{block::BLOCK_SIZE, inode::InodeType};
 use crate::storage::YfsStorage;
@@ -17,6 +18,9 @@ pub struct YfsFs<S: YfsStorage> {
 }
 
 impl<S: YfsStorage> YfsFs<S> {
+    const TTL: Duration = Duration::new(1, 0);
+    const GENERATION: u64 = 1;
+
     pub fn new(yfs: Yfs<S>) -> Result<YfsFs<S>> {
         let mut attributes = vec![None];
 
@@ -69,6 +73,13 @@ impl<S: YfsStorage> YfsFs<S> {
             blksize: BLOCK_SIZE as u32,
         })
     }
+
+    fn assign_file_handle(&mut self) -> u64 {
+        let assigned = self.first_free_handle;
+        self.first_free_handle += 1;
+
+        assigned
+    }
 }
 
 impl<S: YfsStorage> Filesystem for YfsFs<S> {
@@ -90,7 +101,7 @@ impl<S: YfsStorage> Filesystem for YfsFs<S> {
                     return;
                 };
 
-                reply.entry(&std::time::Duration::new(1, 0), &attr, 1);
+                reply.entry(&Self::TTL, &attr, Self::GENERATION);
                 return;
             }
         }
@@ -99,13 +110,11 @@ impl<S: YfsStorage> Filesystem for YfsFs<S> {
     }
 
     fn open(&mut self, _req: &Request<'_>, _ino: u64, flags: i32, reply: fuser::ReplyOpen) {
-        reply.opened(self.first_free_handle, flags as u32);
-        self.first_free_handle += 1;
+        reply.opened(self.assign_file_handle(), flags as u32);
     }
 
     fn opendir(&mut self, _req: &Request<'_>, _ino: u64, flags: i32, reply: fuser::ReplyOpen) {
-        reply.opened(self.first_free_handle, flags as u32);
-        self.first_free_handle += 1;
+        reply.opened(self.assign_file_handle(), flags as u32);
     }
 
     fn getattr(&mut self, _req: &Request, ino: u64, reply: ReplyAttr) {
@@ -114,7 +123,7 @@ impl<S: YfsStorage> Filesystem for YfsFs<S> {
             return;
         };
 
-        reply.attr(&std::time::Duration::new(1, 0), &attr);
+        reply.attr(&Self::TTL, &attr);
     }
 
     fn setattr(
@@ -169,7 +178,7 @@ impl<S: YfsStorage> Filesystem for YfsFs<S> {
             .unwrap_or(attr.mtime);
         attr.ctime = ctime.unwrap_or(attr.ctime);
 
-        reply.attr(&std::time::Duration::new(1, 0), attr);
+        reply.attr(&Self::TTL, attr);
     }
 
     fn read(
@@ -275,5 +284,41 @@ impl<S: YfsStorage> Filesystem for YfsFs<S> {
         self.attributes[ino as usize] = Some(attr);
 
         reply.written(write_len as u32);
+    }
+
+    fn create(
+        &mut self,
+        _req: &Request<'_>,
+        parent: u64,
+        name: &OsStr,
+        _mode: u32,
+        _umask: u32,
+        flags: i32,
+        reply: fuser::ReplyCreate,
+    ) {
+        let Ok(name) = CString::new(name.as_bytes()) else {
+            reply.error(EINVAL);
+            return;
+        };
+
+        let Ok(new_inum) = self.yfs.create_file(parent as InodeNumber, &name) else {
+            reply.error(EINVAL);
+            return;
+        };
+
+        let Ok(attr) = Self::inode_to_attr(&self.yfs, new_inum) else {
+            reply.error(ENOENT);
+            return;
+        };
+
+        self.attributes[new_inum as usize] = Some(attr);
+
+        reply.created(
+            &Self::TTL,
+            &attr,
+            Self::GENERATION,
+            self.assign_file_handle(),
+            flags as u32,
+        );
     }
 }

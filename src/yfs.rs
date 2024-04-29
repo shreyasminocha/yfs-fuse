@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::ffi::{CStr, CString};
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, bail, ensure, Context, Result};
 use bitvec::vec::BitVec;
 use log::{info, warn};
 
@@ -29,7 +29,12 @@ pub struct Yfs<S: YfsStorage> {
     pub storage: S,
     pub num_blocks: usize,
     pub num_inodes: usize,
-    pub block_bitmap: BitVec,
+    /// Tracks the allocation status of blocks.
+    /// A value of `true` represents "occupied".
+    block_bitmap: BitVec,
+    /// Tracks the allocation status of inodes.
+    /// A value of `true` represents "occupied".
+    inode_bitmap: BitVec,
 }
 
 impl<S: YfsStorage> Yfs<S> {
@@ -39,6 +44,7 @@ impl<S: YfsStorage> Yfs<S> {
             num_blocks: FS_HEADER_BLOCK_NUMBER,
             num_inodes: 0,
             block_bitmap: BitVec::new(),
+            inode_bitmap: BitVec::new(),
         };
 
         let header_block = yfs.storage.read_block(FS_HEADER_BLOCK_NUMBER)?;
@@ -71,9 +77,13 @@ impl<S: YfsStorage> Yfs<S> {
         let _ = yfs.storage.read_block(yfs.num_blocks - 1)?;
 
         yfs.block_bitmap.resize(yfs.num_blocks, false);
+        // inodes are one-indexed. we add one to simplify indexing
+        yfs.inode_bitmap.resize(yfs.num_inodes + 1, false);
 
         // sector/block zero is the boot sector.
         yfs.block_bitmap.set(0, true);
+        // inode zero doesn't exist
+        yfs.inode_bitmap.set(0, true);
 
         // the first INODE_SIZE bytes of the first inode block are occupied by the
         // file system header
@@ -92,6 +102,9 @@ impl<S: YfsStorage> Yfs<S> {
 
                 continue;
             }
+
+            // this inode is occupied
+            yfs.inode_bitmap.set(inum, true);
 
             let block_numbers = yfs.get_inode_allocated_block_numbers(inode)?;
             for block_number in block_numbers {
@@ -139,27 +152,11 @@ impl<S: YfsStorage> Yfs<S> {
     }
 
     pub fn read_directory(&self, inum: InodeNumber) -> Result<Vec<DirectoryEntry>> {
-        let inode = self.read_inode(inum)?;
-        let contents = self.read_file(inum, 0, inode.size as usize)?;
-
-        let mut entries = vec![];
-
-        for chunk in contents.chunks_exact(DIRECTORY_ENTRY_SIZE) {
-            let entry: DirectoryEntry = bincode::deserialize(chunk)?;
-
-            if entry.inum == 0 {
-                // "free directory entry"
-                if entry.name != DirectoryName::default() {
-                    warn!("free directory entry has non-empty name");
-                }
-
-                continue;
-            }
-
-            entries.push(entry);
-        }
-
-        Ok(entries)
+        Ok(self
+            .read_directory_entries(inum)?
+            .into_iter()
+            .filter(|entry| entry.inum != 0)
+            .collect())
     }
 
     pub fn read_file(&self, inum: InodeNumber, offset: usize, size: usize) -> Result<Vec<u8>> {
@@ -233,6 +230,25 @@ impl<S: YfsStorage> Yfs<S> {
         Ok(write_len)
     }
 
+    pub fn create_file(&mut self, parent_inum: InodeNumber, name: &CStr) -> Result<InodeNumber> {
+        let new_inum = self
+            .assign_free_inode()
+            .ok_or(anyhow!("no more free inodes"))? as InodeNumber;
+        let new_entry = DirectoryEntry::new(new_inum as i16, name)?;
+
+        let new_inode = Inode::new(InodeType::Regular, self.read_inode(new_inum)?.reuse + 1);
+        self.write_inode(new_inum, new_inode)?;
+
+        let entries = self.read_directory_entries(parent_inum)?;
+        let free_entry_index = entries.iter().position(|entry| entry.inum == 0);
+        let new_entry_index = free_entry_index.unwrap_or(entries.len());
+
+        let offset = new_entry_index * DIRECTORY_ENTRY_SIZE;
+        self.write_file(parent_inum, offset, &bincode::serialize(&new_entry)?)?;
+
+        Ok(new_inum)
+    }
+
     pub fn read_inode(&self, inum: InodeNumber) -> Result<Inode> {
         if inum == 0 {
             bail!("invalid inode number: {inum}");
@@ -265,6 +281,26 @@ impl<S: YfsStorage> Yfs<S> {
         self.storage.write_block(block_number, block)?;
 
         Ok(())
+    }
+
+    fn read_directory_entries(&self, inum: InodeNumber) -> Result<Vec<DirectoryEntry>> {
+        let inode = self.read_inode(inum)?;
+        ensure!(
+            inode.type_ == InodeType::Directory,
+            "inode is not a directory: {inum}"
+        );
+
+        let contents = self.read_file(inum, 0, inode.size as usize)?;
+        let entry_chunks = contents.chunks_exact(DIRECTORY_ENTRY_SIZE);
+        ensure!(
+            entry_chunks.remainder().is_empty(),
+            "directory size is not a multiple of {DIRECTORY_ENTRY_SIZE}"
+        );
+
+        entry_chunks
+            .map(bincode::deserialize::<DirectoryEntry>)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|err| err.into())
     }
 
     /// Allocates new blocks if necessary.
@@ -423,6 +459,16 @@ impl<S: YfsStorage> Yfs<S> {
         assigned
     }
 
+    fn assign_free_inode(&mut self) -> Option<InodeNumber> {
+        let assigned = self.inode_bitmap.first_zero();
+
+        if let Some(inode) = assigned {
+            self.inode_bitmap.set(inode, true);
+        }
+
+        assigned.map(|inum| inum as InodeNumber)
+    }
+
     /// Checks the filesystem for consistency. Performs a depth-first traversal of the directory
     /// tree.
     ///
@@ -484,9 +530,18 @@ impl<S: YfsStorage> Yfs<S> {
 
                 let mut entry_names: HashSet<CString> = HashSet::new();
 
-                for entry in self.read_directory(inum)? {
+                for entry in self.read_directory_entries(inum)? {
                     if entry.inum < 0 || entry.inum as usize > self.num_inodes {
                         bail!("invalid inode number in directory entry: {}", entry.inum);
+                    }
+
+                    if entry.inum == 0 {
+                        // "free directory entry"
+                        if entry.name != DirectoryName::default() {
+                            warn!("free directory entry has non-empty name");
+                        }
+
+                        continue;
                     }
 
                     let entry_inum = entry.inum as InodeNumber;
@@ -605,5 +660,40 @@ mod tests {
 
         #[test]
         fn test_directory_loop() {}
+    }
+
+    mod create_file {
+        #[test]
+        fn test_invalid_parent_inum() {}
+
+        #[test]
+        fn test_non_directory_parent() {}
+
+        #[test]
+        fn test_no_more_inodes() {}
+
+        #[test]
+        fn test_root_child() {}
+
+        #[test]
+        fn test_nested_child() {}
+
+        #[test]
+        fn test_parent_free_entry() {}
+
+        #[test]
+        fn test_parent_no_free_entry() {}
+
+        #[test]
+        fn test_parent_no_free_entry_block_boundary() {}
+
+        #[test]
+        fn test_inode_type() {}
+
+        #[test]
+        fn test_inode_size() {}
+
+        #[test]
+        fn test_inode_reuse_count() {}
     }
 }

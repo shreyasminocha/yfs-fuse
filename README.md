@@ -8,9 +8,10 @@ Note: the code is currently poorly documented and missing tests.
 
 - [x] listing directories
 - [x] reading files
-- [ ] creating files
-- [ ] deleting files
 - [x] writing files
+- [x] creating files
+- [ ] creating directories
+- [ ] deleting files
 - [ ] symlinks
 - [ ] …
 

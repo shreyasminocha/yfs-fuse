@@ -41,6 +41,24 @@ pub struct Inode {
     pub indirect: i32,
 }
 
+impl Inode {
+    pub fn new(type_: InodeType, reuse: i32) -> Self {
+        Inode {
+            type_,
+            nlink: match type_ {
+                InodeType::Free => 0,
+                InodeType::Directory => 2,
+                InodeType::Regular => 1,
+                InodeType::Symlink => unimplemented!("symlink support is unimplemented"),
+            },
+            reuse,
+            size: 0,
+            direct: [0; NUM_DIRECT],
+            indirect: 0,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize_repr, Deserialize_repr)]
 #[repr(i16)]
 pub enum InodeType {
