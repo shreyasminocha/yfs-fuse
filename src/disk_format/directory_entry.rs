@@ -7,8 +7,18 @@ use std::{
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 
+use super::block::BLOCK_SIZE;
+
 pub const DIRECTORY_ENTRY_SIZE: usize = 32;
 const_assert!(size_of::<DirectoryEntry>() == DIRECTORY_ENTRY_SIZE);
+
+const_assert!(BLOCK_SIZE % DIRECTORY_ENTRY_SIZE == 0);
+pub const DIRECTORY_ENTRIES_PER_BLOCK: usize = BLOCK_SIZE / DIRECTORY_ENTRY_SIZE;
+
+pub const FREE_DIRECTORY_ENTRY: DirectoryEntry = DirectoryEntry {
+    inum: 0,
+    name: DirectoryName([0; 30]),
+};
 
 #[derive(Debug, Serialize, Deserialize)]
 #[repr(C)]

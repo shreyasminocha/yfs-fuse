@@ -10,8 +10,10 @@ Note: the code is currently poorly documented and missing tests.
 - [x] reading files
 - [x] writing files
 - [x] creating files
-- [ ] creating directories
+- [x] creating directories
+- [ ] creating hard links
 - [ ] deleting files
+- [ ] renaming files
 - [ ] symlinks
 - [ ] …
 

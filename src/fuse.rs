@@ -321,4 +321,33 @@ impl<S: YfsStorage> Filesystem for YfsFs<S> {
             flags as u32,
         );
     }
+
+    fn mkdir(
+        &mut self,
+        _req: &Request<'_>,
+        parent: u64,
+        name: &OsStr,
+        _mode: u32,
+        _umask: u32,
+        reply: ReplyEntry,
+    ) {
+        let Ok(name) = CString::new(name.as_bytes()) else {
+            reply.error(EINVAL);
+            return;
+        };
+
+        let Ok(new_inum) = self.yfs.create_directory(parent as InodeNumber, &name) else {
+            reply.error(EINVAL);
+            return;
+        };
+
+        let Ok(attr) = Self::inode_to_attr(&self.yfs, new_inum) else {
+            reply.error(ENOENT);
+            return;
+        };
+
+        self.attributes[new_inum as usize] = Some(attr);
+
+        reply.entry(&Self::TTL, &attr, Self::GENERATION);
+    }
 }

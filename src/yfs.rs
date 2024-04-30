@@ -5,6 +5,7 @@ use anyhow::{anyhow, bail, ensure, Context, Result};
 use bitvec::vec::BitVec;
 use log::{info, warn};
 
+use crate::disk_format::directory_entry::{DIRECTORY_ENTRIES_PER_BLOCK, FREE_DIRECTORY_ENTRY};
 use crate::{
     disk_format::{
         block::{Block, BLOCK_SIZE},
@@ -231,20 +232,24 @@ impl<S: YfsStorage> Yfs<S> {
     }
 
     pub fn create_file(&mut self, parent_inum: InodeNumber, name: &CStr) -> Result<InodeNumber> {
-        let new_inum = self
-            .assign_free_inode()
-            .ok_or(anyhow!("no more free inodes"))? as InodeNumber;
-        let new_entry = DirectoryEntry::new(new_inum as i16, name)?;
+        self.create(parent_inum, name, InodeType::Regular)
+    }
 
-        let new_inode = Inode::new(InodeType::Regular, self.read_inode(new_inum)?.reuse + 1);
-        self.write_inode(new_inum, new_inode)?;
+    pub fn create_directory(
+        &mut self,
+        parent_inum: InodeNumber,
+        name: &CStr,
+    ) -> Result<InodeNumber> {
+        let new_inum = self.create(parent_inum, name, InodeType::Directory)?;
 
-        let entries = self.read_directory_entries(parent_inum)?;
-        let free_entry_index = entries.iter().position(|entry| entry.inum == 0);
-        let new_entry_index = free_entry_index.unwrap_or(entries.len());
+        // we write a block's worth of entries so that garbage in the newly-allocated block
+        // isn't interpreted as an entry
+        let mut entries = [FREE_DIRECTORY_ENTRY; DIRECTORY_ENTRIES_PER_BLOCK];
+        entries[0] = DirectoryEntry::new(new_inum as i16, c".").expect("'.' is a valid name");
+        entries[1] = DirectoryEntry::new(parent_inum as i16, c"..").expect("'..' is a valid name");
 
-        let offset = new_entry_index * DIRECTORY_ENTRY_SIZE;
-        self.write_file(parent_inum, offset, &bincode::serialize(&new_entry)?)?;
+        let data = bincode::serialize(&entries)?;
+        self.write_file(new_inum, 0, &data)?;
 
         Ok(new_inum)
     }
@@ -281,6 +286,31 @@ impl<S: YfsStorage> Yfs<S> {
         self.storage.write_block(block_number, block)?;
 
         Ok(())
+    }
+
+    fn create(
+        &mut self,
+        parent_inum: InodeNumber,
+        name: &CStr,
+        inode_type: InodeType,
+    ) -> Result<InodeNumber> {
+        let new_inum = self
+            .assign_free_inode()
+            .ok_or(anyhow!("no more free inodes"))? as InodeNumber;
+        let new_entry = DirectoryEntry::new(new_inum as i16, name)?;
+
+        let old_reuse = self.read_inode(new_inum)?.reuse;
+        let new_inode = Inode::new(inode_type, old_reuse + 1);
+        self.write_inode(new_inum, new_inode)?;
+
+        let entries = self.read_directory_entries(parent_inum)?;
+        let free_entry_index = entries.iter().position(|entry| entry.inum == 0);
+        let new_entry_index = free_entry_index.unwrap_or(entries.len());
+
+        let offset = new_entry_index * DIRECTORY_ENTRY_SIZE;
+        self.write_file(parent_inum, offset, &bincode::serialize(&new_entry)?)?;
+
+        Ok(new_inum)
     }
 
     fn read_directory_entries(&self, inum: InodeNumber) -> Result<Vec<DirectoryEntry>> {
@@ -662,7 +692,7 @@ mod tests {
         fn test_directory_loop() {}
     }
 
-    mod create_file {
+    mod create {
         #[test]
         fn test_invalid_parent_inum() {}
 
@@ -686,7 +716,9 @@ mod tests {
 
         #[test]
         fn test_parent_no_free_entry_block_boundary() {}
+    }
 
+    mod create_file {
         #[test]
         fn test_inode_type() {}
 
@@ -695,5 +727,16 @@ mod tests {
 
         #[test]
         fn test_inode_reuse_count() {}
+    }
+
+    mod create_directory {
+        #[test]
+        fn test_inode_type() {}
+
+        #[test]
+        fn test_directory_initial_entries() {}
+
+        #[test]
+        fn test_directory_free_entries() {}
     }
 }
