@@ -350,4 +350,35 @@ impl<S: YfsStorage> Filesystem for YfsFs<S> {
 
         reply.entry(&Self::TTL, &attr, Self::GENERATION);
     }
+
+    fn link(
+        &mut self,
+        _req: &Request<'_>,
+        ino: u64,
+        newparent: u64,
+        newname: &OsStr,
+        reply: ReplyEntry,
+    ) {
+        let Ok(name) = CString::new(newname.as_bytes()) else {
+            reply.error(EINVAL);
+            return;
+        };
+
+        let Ok(_) = self
+            .yfs
+            .create_hard_link(newparent as InodeNumber, &name, ino as InodeNumber)
+        else {
+            reply.error(EINVAL);
+            return;
+        };
+
+        // we update the attributes to reflect the new `nlink`
+        let Ok(attr) = Self::inode_to_attr(&self.yfs, ino as InodeNumber) else {
+            reply.error(ENOENT);
+            return;
+        };
+        self.attributes[ino as usize] = Some(attr);
+
+        reply.entry(&Self::TTL, &attr, Self::GENERATION);
+    }
 }

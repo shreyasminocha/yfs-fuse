@@ -254,6 +254,33 @@ impl<S: YfsStorage> Yfs<S> {
         Ok(new_inum)
     }
 
+    pub fn create_hard_link(
+        &mut self,
+        parent_inum: InodeNumber,
+        name: &CStr,
+        inum: InodeNumber,
+    ) -> Result<()> {
+        let parent_inode = self.read_inode(parent_inum)?;
+        ensure!(
+            parent_inode.type_ == InodeType::Directory,
+            "parent is not a directory: {parent_inum}"
+        );
+
+        let mut inode = self.read_inode(inum)?;
+        ensure!(
+            inode.type_ == InodeType::Regular,
+            "can create hard links to regular files only"
+        );
+
+        let new_entry = DirectoryEntry::new(inum as i16, name)?;
+        self.add_directory_entry(parent_inum, new_entry)?;
+
+        inode.nlink += 1;
+        self.write_inode(inum, inode)?;
+
+        Ok(())
+    }
+
     pub fn read_inode(&self, inum: InodeNumber) -> Result<Inode> {
         if inum == 0 {
             bail!("invalid inode number: {inum}");
@@ -294,6 +321,12 @@ impl<S: YfsStorage> Yfs<S> {
         name: &CStr,
         inode_type: InodeType,
     ) -> Result<InodeNumber> {
+        let parent_inode = self.read_inode(parent_inum)?;
+        ensure!(
+            parent_inode.type_ == InodeType::Directory,
+            "parent is not a directory: {parent_inum}"
+        );
+
         let new_inum = self
             .assign_free_inode()
             .ok_or(anyhow!("no more free inodes"))? as InodeNumber;
@@ -303,14 +336,26 @@ impl<S: YfsStorage> Yfs<S> {
         let new_inode = Inode::new(inode_type, old_reuse + 1);
         self.write_inode(new_inum, new_inode)?;
 
-        let entries = self.read_directory_entries(parent_inum)?;
+        self.add_directory_entry(parent_inum, new_entry)?;
+
+        Ok(new_inum)
+    }
+
+    fn add_directory_entry(&mut self, inum: InodeNumber, entry: DirectoryEntry) -> Result<()> {
+        let inode = self.read_inode(inum)?;
+        ensure!(
+            inode.type_ == InodeType::Directory,
+            "inode is not a directory: {inum}"
+        );
+
+        let entries = self.read_directory_entries(inum)?;
         let free_entry_index = entries.iter().position(|entry| entry.inum == 0);
         let new_entry_index = free_entry_index.unwrap_or(entries.len());
 
         let offset = new_entry_index * DIRECTORY_ENTRY_SIZE;
-        self.write_file(parent_inum, offset, &bincode::serialize(&new_entry)?)?;
+        self.write_file(inum, offset, &bincode::serialize(&entry)?)?;
 
-        Ok(new_inum)
+        Ok(())
     }
 
     fn read_directory_entries(&self, inum: InodeNumber) -> Result<Vec<DirectoryEntry>> {
@@ -738,5 +783,31 @@ mod tests {
 
         #[test]
         fn test_directory_free_entries() {}
+    }
+
+    mod create_hard_link {
+        #[test]
+        fn test_link_directory() {}
+
+        #[test]
+        fn test_link_free_inode() {}
+
+        #[test]
+        fn test_link_invalid_parent() {}
+
+        #[test]
+        fn test_link_file_parent() {}
+
+        #[test]
+        fn test_link_duplicate_name() {}
+
+        #[test]
+        fn test_link_sibling() {}
+
+        #[test]
+        fn test_link_parent_sibling() {}
+
+        #[test]
+        fn test_nlink_updated() {}
     }
 }

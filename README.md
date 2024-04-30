@@ -11,7 +11,7 @@ Note: the code is currently poorly documented and missing tests.
 - [x] writing files
 - [x] creating files
 - [x] creating directories
-- [ ] creating hard links
+- [x] creating hard links
 - [ ] deleting files
 - [ ] renaming files
 - [ ] symlinks
