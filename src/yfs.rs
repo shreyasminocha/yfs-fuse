@@ -251,6 +251,8 @@ impl<S: YfsStorage> Yfs<S> {
         let data = bincode::serialize(&entries)?;
         self.write_file(new_inum, 0, &data)?;
 
+        self.update_inode(parent_inum, |parent_inode| parent_inode.nlink += 1)?;
+
         Ok(new_inum)
     }
 
@@ -313,6 +315,15 @@ impl<S: YfsStorage> Yfs<S> {
         self.storage.write_block(block_number, block)?;
 
         Ok(())
+    }
+
+    fn update_inode<F>(&self, inum: InodeNumber, mut update_inode: F) -> Result<()>
+    where
+        F: FnMut(&mut Inode),
+    {
+        let mut inode = self.read_inode(inum)?;
+        update_inode(&mut inode);
+        self.write_inode(inum, inode)
     }
 
     fn create(
@@ -783,6 +794,12 @@ mod tests {
 
         #[test]
         fn test_directory_free_entries() {}
+
+        #[test]
+        fn test_directory_nlinks() {}
+
+        #[test]
+        fn test_parent_directory_nlinks() {}
     }
 
     mod create_hard_link {
