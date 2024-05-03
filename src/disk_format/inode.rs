@@ -24,6 +24,15 @@ pub const MAX_FILE_SIZE: usize = (NUM_DIRECT + NUM_INDIRECT) * BLOCK_SIZE;
 
 pub const ROOT_INODE: InodeNumber = 1;
 
+pub const FREE_INODE: Inode = Inode {
+    type_: InodeType::Free,
+    nlink: 0,
+    reuse: 0,
+    size: 0,
+    direct: [0; NUM_DIRECT],
+    indirect: 0,
+};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[repr(C)]
 pub struct Inode {

@@ -6,6 +6,7 @@ use bitvec::vec::BitVec;
 use log::{info, warn};
 
 use crate::disk_format::directory_entry::{DIRECTORY_ENTRIES_PER_BLOCK, FREE_DIRECTORY_ENTRY};
+use crate::disk_format::inode::FREE_INODE;
 use crate::{
     disk_format::{
         block::{Block, BLOCK_SIZE},
@@ -283,6 +284,48 @@ impl<S: YfsStorage> Yfs<S> {
         Ok(())
     }
 
+    pub fn remove_hard_link(
+        &mut self,
+        parent_inum: InodeNumber,
+        name: &CStr,
+    ) -> Result<InodeNumber> {
+        ensure!(
+            name != c"." && name != c"..",
+            "cannot remove '.' and '..' entries"
+        );
+
+        let entries = self.read_directory_entries(parent_inum)?;
+        let (entry_index, entry) = entries
+            .iter()
+            .enumerate()
+            .find(|(_, entry)| CString::from(&entry.name) == name.into())
+            .ok_or(anyhow!("entry does not exist: {name:?}"))?;
+
+        let entry_inum = entry.inum as InodeNumber;
+        let mut entry_inode = self.read_inode(entry_inum)?;
+
+        ensure!(
+            entry_inode.type_ == InodeType::Regular,
+            "can unlink only regular files"
+        );
+
+        let offset = entry_index * DIRECTORY_ENTRY_SIZE;
+        self.write_file(
+            parent_inum,
+            offset,
+            &bincode::serialize(&FREE_DIRECTORY_ENTRY)?,
+        )?;
+
+        entry_inode.nlink -= 1;
+        self.write_inode(entry_inum, entry_inode)?;
+
+        if entry_inode.nlink == 0 {
+            self.delete_inode(entry_inum)?;
+        }
+
+        Ok(entry_inum)
+    }
+
     pub fn read_inode(&self, inum: InodeNumber) -> Result<Inode> {
         if inum == 0 {
             bail!("invalid inode number: {inum}");
@@ -387,6 +430,20 @@ impl<S: YfsStorage> Yfs<S> {
             .map(bincode::deserialize::<DirectoryEntry>)
             .collect::<Result<Vec<_>, _>>()
             .map_err(|err| err.into())
+    }
+
+    /// Frees any allocated blocks and writes a free inode in place of the original inode.
+    fn delete_inode(&mut self, inum: InodeNumber) -> Result<()> {
+        let inode = self.read_inode(inum)?;
+        let allocated_blocks = self.get_inode_allocated_block_numbers(inode)?;
+
+        allocated_blocks
+            .into_iter()
+            .for_each(|block| self.mark_block_as_free(block));
+
+        self.mark_inode_as_free(inum)?;
+
+        Ok(())
     }
 
     /// Allocates new blocks if necessary.
@@ -545,6 +602,10 @@ impl<S: YfsStorage> Yfs<S> {
         assigned
     }
 
+    fn mark_block_as_free(&mut self, block_number: BlockNumber) {
+        self.block_bitmap.set(block_number, false);
+    }
+
     fn assign_free_inode(&mut self) -> Option<InodeNumber> {
         let assigned = self.inode_bitmap.first_zero();
 
@@ -553,6 +614,12 @@ impl<S: YfsStorage> Yfs<S> {
         }
 
         assigned.map(|inum| inum as InodeNumber)
+    }
+
+    fn mark_inode_as_free(&mut self, inum: InodeNumber) -> Result<()> {
+        self.inode_bitmap.set(inum as usize, false);
+
+        self.write_inode(inum, FREE_INODE)
     }
 
     /// Checks the filesystem for consistency. Performs a depth-first traversal of the directory
@@ -826,5 +893,37 @@ mod tests {
 
         #[test]
         fn test_nlink_updated() {}
+    }
+
+    mod remove_hard_link {
+        #[test]
+        fn test_unlink_invalid_parent() {}
+
+        #[test]
+        fn test_unlink_dot() {}
+
+        #[test]
+        fn test_unlink_dot_dot() {}
+
+        #[test]
+        fn test_unlink_non_existent_entry() {}
+
+        #[test]
+        fn test_unlink_removes_entry() {}
+
+        #[test]
+        fn test_unlink_directory() {}
+
+        #[test]
+        fn test_unlink_does_not_remove_file_with_links() {}
+
+        #[test]
+        fn test_unlink_decrements_nlink() {}
+
+        #[test]
+        fn test_unlink_frees_inode() {}
+
+        #[test]
+        fn test_unlink_frees_blocks() {}
     }
 }

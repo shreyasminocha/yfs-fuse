@@ -25,13 +25,7 @@ impl<S: YfsStorage> YfsFs<S> {
         let mut attributes = vec![None];
 
         for inum in 1..=yfs.num_inodes {
-            let inode = yfs.read_inode(inum as u16)?;
-
-            if inode.type_ == InodeType::Free {
-                attributes.push(None);
-            } else {
-                attributes.push(Some(Self::inode_to_attr(&yfs, inum as InodeNumber)?));
-            }
+            attributes.push(Self::inode_to_attr(&yfs, inum as InodeNumber)?);
         }
 
         Ok(YfsFs {
@@ -44,13 +38,17 @@ impl<S: YfsStorage> YfsFs<S> {
     /// Converts an inode to a fuse FileAttr.
     ///
     /// Sets uid and gid to 0. Sets permissions to 755.
-    fn inode_to_attr(yfs: &Yfs<S>, inum: InodeNumber) -> Result<fuser::FileAttr> {
+    fn inode_to_attr(yfs: &Yfs<S>, inum: InodeNumber) -> Result<Option<fuser::FileAttr>> {
         let inode = yfs.read_inode(inum)?;
+
+        if inode.type_ == InodeType::Free {
+            return Ok(None);
+        }
 
         let time_metadata = yfs.storage.time_metadata().unwrap_or_default();
         let ownership_metadata = yfs.storage.ownership_metadata().unwrap_or_default();
 
-        Ok(fuser::FileAttr {
+        Ok(Some(fuser::FileAttr {
             ino: inum as u64,
             size: inode.size as u64,
             blocks: inode.size.div_ceil(BLOCK_SIZE as i32) as u64,
@@ -61,8 +59,8 @@ impl<S: YfsStorage> YfsFs<S> {
             kind: match inode.type_ {
                 InodeType::Directory => FileType::Directory,
                 InodeType::Regular => FileType::RegularFile,
-                InodeType::Free => panic!("attempted to generate attributes for free inode"),
-                _ => unreachable!(),
+                InodeType::Symlink => unimplemented!("symlink support is unimplemented"),
+                InodeType::Free => unreachable!("we handle this case above"),
             },
             perm: 0o755,
             nlink: inode.nlink as u32,
@@ -71,7 +69,7 @@ impl<S: YfsStorage> YfsFs<S> {
             rdev: 0,
             flags: 0,
             blksize: BLOCK_SIZE as u32,
-        })
+        }))
     }
 
     fn assign_file_handle(&mut self) -> u64 {
@@ -281,7 +279,7 @@ impl<S: YfsStorage> Filesystem for YfsFs<S> {
             return;
         };
 
-        self.attributes[ino as usize] = Some(attr);
+        self.attributes[ino as usize] = attr;
 
         reply.written(write_len as u32);
     }
@@ -311,11 +309,11 @@ impl<S: YfsStorage> Filesystem for YfsFs<S> {
             return;
         };
 
-        self.attributes[new_inum as usize] = Some(attr);
+        self.attributes[new_inum as usize] = attr;
 
         reply.created(
             &Self::TTL,
-            &attr,
+            &attr.expect("we just created the inode"),
             Self::GENERATION,
             self.assign_file_handle(),
             flags as u32,
@@ -345,10 +343,19 @@ impl<S: YfsStorage> Filesystem for YfsFs<S> {
             reply.error(ENOENT);
             return;
         };
+        self.attributes[new_inum as usize] = attr;
 
-        self.attributes[new_inum as usize] = Some(attr);
+        let Ok(parent_attr) = Self::inode_to_attr(&self.yfs, parent as InodeNumber) else {
+            reply.error(ENOENT);
+            return;
+        };
+        self.attributes[parent as usize] = parent_attr;
 
-        reply.entry(&Self::TTL, &attr, Self::GENERATION);
+        reply.entry(
+            &Self::TTL,
+            &attr.expect("we just created the directory"),
+            Self::GENERATION,
+        );
     }
 
     fn link(
@@ -377,8 +384,33 @@ impl<S: YfsStorage> Filesystem for YfsFs<S> {
             reply.error(ENOENT);
             return;
         };
-        self.attributes[ino as usize] = Some(attr);
+        self.attributes[ino as usize] = attr;
 
-        reply.entry(&Self::TTL, &attr, Self::GENERATION);
+        reply.entry(
+            &Self::TTL,
+            &attr.expect("we successfully created a link to the inode, so it must exist"),
+            Self::GENERATION,
+        );
+    }
+
+    fn unlink(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: fuser::ReplyEmpty) {
+        let Ok(name) = CString::new(name.as_bytes()) else {
+            reply.error(EINVAL);
+            return;
+        };
+
+        let Ok(entry_inum) = self.yfs.remove_hard_link(parent as InodeNumber, &name) else {
+            reply.error(EINVAL);
+            return;
+        };
+
+        // we update the attributes to reflect the new `nlink`
+        let Ok(attr) = Self::inode_to_attr(&self.yfs, entry_inum as InodeNumber) else {
+            reply.error(ENOENT);
+            return;
+        };
+        self.attributes[entry_inum as usize] = attr;
+
+        reply.ok();
     }
 }

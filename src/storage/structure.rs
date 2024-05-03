@@ -98,7 +98,7 @@ mod tests {
     use crate::disk_format::{
         block::BLOCK_SIZE,
         header::FS_HEADER_SIZE,
-        inode::{Inode, InodeType, INODES_PER_BLOCK, INODE_SIZE, NUM_DIRECT},
+        inode::{Inode, InodeType, FREE_INODE, INODES_PER_BLOCK, INODE_SIZE, NUM_DIRECT},
     };
 
     use super::*;
@@ -303,15 +303,6 @@ mod tests {
     }
 
     const EMPTY_BLOCK: Block = [0; BLOCK_SIZE];
-
-    const FREE_INODE: Inode = Inode {
-        type_: InodeType::Free,
-        nlink: 0,
-        reuse: 0,
-        size: 0,
-        direct: [0; NUM_DIRECT],
-        indirect: 0,
-    };
 
     const EMPTY_FILE_INODE: Inode = Inode {
         type_: InodeType::Regular,

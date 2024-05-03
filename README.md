@@ -12,7 +12,8 @@ Note: the code is currently poorly documented and missing tests.
 - [x] creating files
 - [x] creating directories
 - [x] creating hard links
-- [ ] deleting files
+- [x] deleting files
+- [ ] deleting directories
 - [ ] renaming files
 - [ ] symlinks
 - [ ] …
