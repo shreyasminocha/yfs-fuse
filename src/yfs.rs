@@ -153,6 +153,22 @@ impl<S: YfsStorage> Yfs<S> {
         Ok(yfs)
     }
 
+    pub fn lookup_entry(
+        &self,
+        parent_inum: InodeNumber,
+        name: &CStr,
+    ) -> Result<Option<InodeNumber>> {
+        let inum = self.read_directory(parent_inum)?.iter().find_map(|entry| {
+            if CString::from(&entry.name) == name.to_owned() {
+                Some(entry.inum as InodeNumber)
+            } else {
+                None
+            }
+        });
+
+        Ok(inum)
+    }
+
     pub fn read_directory(&self, inum: InodeNumber) -> Result<Vec<DirectoryEntry>> {
         Ok(self
             .read_directory_entries(inum)?
