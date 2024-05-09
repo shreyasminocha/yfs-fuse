@@ -187,6 +187,17 @@ impl<S: YfsStorage> YfsFs<S> {
 
         assigned
     }
+
+    fn rename_entry(
+        &mut self,
+        parent_inum: InodeNumber,
+        name: &CStr,
+        new_parent_inum: InodeNumber,
+        new_name: &CStr,
+    ) -> Result<()> {
+        self.yfs
+            .rename(parent_inum, name, new_parent_inum, new_name)
+    }
 }
 
 impl<S: YfsStorage> Filesystem for YfsFs<S> {
@@ -416,6 +427,41 @@ impl<S: YfsStorage> Filesystem for YfsFs<S> {
         };
 
         if self.remove_directory(parent as InodeNumber, &name).is_ok() {
+            reply.ok();
+        } else {
+            reply.error(EINVAL);
+        }
+    }
+
+    fn rename(
+        &mut self,
+        _req: &Request<'_>,
+        parent: u64,
+        name: &OsStr,
+        newparent: u64,
+        newname: &OsStr,
+        _flags: u32,
+        reply: ReplyEmpty,
+    ) {
+        let Ok(name) = CString::new(name.as_bytes()) else {
+            reply.error(EINVAL);
+            return;
+        };
+
+        let Ok(new_name) = CString::new(newname.as_bytes()) else {
+            reply.error(EINVAL);
+            return;
+        };
+
+        if self
+            .rename_entry(
+                parent as InodeNumber,
+                &name,
+                newparent as InodeNumber,
+                &new_name,
+            )
+            .is_ok()
+        {
             reply.ok();
         } else {
             reply.error(EINVAL);

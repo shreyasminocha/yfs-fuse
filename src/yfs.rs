@@ -300,11 +300,7 @@ impl<S: YfsStorage> Yfs<S> {
 
         ensure!(entry_inum != ROOT_INODE, "cannot rmdir root directory");
 
-        self.write_file(
-            parent_inum,
-            entry_offset,
-            &bincode::serialize(&FREE_DIRECTORY_ENTRY)?,
-        )?;
+        self.remove_entry_at_offset(parent_inum, entry_offset)?;
 
         // entry's '..' child no longer points to the parent
         self.update_inode(parent_inum, |parent_inode| parent_inode.nlink -= 1)?;
@@ -363,11 +359,7 @@ impl<S: YfsStorage> Yfs<S> {
             "can unlink only regular files"
         );
 
-        self.write_file(
-            parent_inum,
-            entry_offset,
-            &bincode::serialize(&FREE_DIRECTORY_ENTRY)?,
-        )?;
+        self.remove_entry_at_offset(parent_inum, entry_offset)?;
 
         entry_inode.nlink -= 1;
         self.write_inode(entry_inum, entry_inode)?;
@@ -377,6 +369,52 @@ impl<S: YfsStorage> Yfs<S> {
         }
 
         Ok(entry_inum)
+    }
+
+    pub fn rename(
+        &mut self,
+        source_parent_inum: InodeNumber,
+        source_name: &CStr,
+        target_parent_inum: InodeNumber,
+        target_name: &CStr,
+    ) -> Result<()> {
+        ensure!(
+            source_name != c"." && source_name != c"..",
+            "cannot rename '.' and '..' entries"
+        );
+
+        let (source_entry_offset, source_entry) = self
+            .lookup_directory_entry(source_parent_inum, source_name)?
+            .ok_or(anyhow!("entry does not exist: {source_name:?}"))?;
+        let inum = source_entry.inum;
+
+        if let Some((target_entry_offset, existing_target_entry)) =
+            self.lookup_directory_entry(target_parent_inum, target_name)?
+        {
+            let existing_target_inode =
+                self.read_inode(existing_target_entry.inum as InodeNumber)?;
+            ensure!(
+                existing_target_inode.type_ != InodeType::Directory,
+                "rename target name cannot refer to a directory"
+            );
+
+            self.remove_hard_link(target_parent_inum, target_name)
+                .context("unable to remove rename target")?;
+
+            let new_entry = DirectoryEntry {
+                inum,
+                ..existing_target_entry
+            };
+            self.add_entry_at_offset(target_parent_inum, target_entry_offset, new_entry)?;
+        } else {
+            let new_entry = DirectoryEntry::new(inum, target_name)?;
+            self.add_directory_entry(target_parent_inum, new_entry)?;
+        }
+
+        // remove old entry
+        self.remove_entry_at_offset(source_parent_inum, source_entry_offset)?;
+
+        Ok(())
     }
 
     pub fn read_inode(&self, inum: InodeNumber) -> Result<Inode> {
@@ -448,19 +486,23 @@ impl<S: YfsStorage> Yfs<S> {
         Ok(new_inum)
     }
 
-    fn add_directory_entry(&mut self, inum: InodeNumber, entry: DirectoryEntry) -> Result<()> {
-        let inode = self.read_inode(inum)?;
+    fn add_directory_entry(
+        &mut self,
+        parent_inum: InodeNumber,
+        entry: DirectoryEntry,
+    ) -> Result<()> {
+        let inode = self.read_inode(parent_inum)?;
         ensure!(
             inode.type_ == InodeType::Directory,
-            "inode is not a directory: {inum}"
+            "inode is not a directory: {parent_inum}"
         );
 
-        let entries = self.read_directory_entries(inum)?;
+        let entries = self.read_directory_entries(parent_inum)?;
         let free_entry_index = entries.iter().position(|entry| entry.inum == 0);
         let new_entry_index = free_entry_index.unwrap_or(entries.len());
 
         let offset = new_entry_index * DIRECTORY_ENTRY_SIZE;
-        self.write_file(inum, offset, &bincode::serialize(&entry)?)?;
+        self.add_entry_at_offset(parent_inum, offset, entry)?;
 
         Ok(())
     }
@@ -502,6 +544,21 @@ impl<S: YfsStorage> Yfs<S> {
             index_entry.map(|(entry_index, entry)| (entry_index * DIRECTORY_ENTRY_SIZE, entry));
 
         Ok(offset_entry)
+    }
+
+    fn add_entry_at_offset(
+        &mut self,
+        inum: InodeNumber,
+        entry_offset: usize,
+        entry: DirectoryEntry,
+    ) -> Result<()> {
+        self.write_file(inum, entry_offset, &bincode::serialize(&entry)?)?;
+
+        Ok(())
+    }
+
+    fn remove_entry_at_offset(&mut self, inum: InodeNumber, entry_offset: usize) -> Result<()> {
+        self.add_entry_at_offset(inum, entry_offset, FREE_DIRECTORY_ENTRY)
     }
 
     /// Frees any allocated blocks and writes a free inode in place of the original inode.
@@ -1020,5 +1077,64 @@ mod tests {
 
         #[test]
         fn test_unlink_frees_blocks() {}
+    }
+
+    mod rename {
+        #[test]
+        fn test_missing_source_parent() {}
+
+        #[test]
+        fn test_invalid_source_parent() {}
+
+        #[test]
+        fn test_missing_target_parent() {}
+
+        #[test]
+        fn test_invalid_target_parent() {}
+
+        #[test]
+        fn test_missing_source_entry() {}
+
+        #[test]
+        fn test_non_existent_target() {}
+
+        #[test]
+        fn test_target_is_directory() {}
+
+        #[test]
+        fn test_existent_target_multiple_links() {}
+
+        #[test]
+        fn test_existent_target_only_link() {}
+
+        #[test]
+        fn test_source_name_dot() {}
+
+        #[test]
+        fn test_source_name_dot_dot() {}
+
+        #[test]
+        fn test_target_name_dot() {}
+
+        #[test]
+        fn test_target_name_dot_dot() {}
+
+        #[test]
+        fn test_same_parents() {}
+
+        #[test]
+        fn test_different_parents() {}
+
+        #[test]
+        fn test_same_parents_same_names() {}
+
+        #[test]
+        fn test_rename_file() {}
+
+        #[test]
+        fn test_rename_directory() {}
+
+        #[test]
+        fn test_nlink_unchanged() {}
     }
 }

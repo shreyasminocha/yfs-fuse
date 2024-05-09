@@ -14,7 +14,7 @@ Note: the code is currently poorly documented and missing tests.
 - [x] creating hard links
 - [x] deleting files
 - [x] deleting directories
-- [ ] renaming files
+- [x] renaming files
 - [ ] symlinks
 - [ ] …
 
