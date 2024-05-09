@@ -20,7 +20,7 @@ pub const FREE_DIRECTORY_ENTRY: DirectoryEntry = DirectoryEntry {
     name: DirectoryName([0; 30]),
 };
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[repr(C)]
 pub struct DirectoryEntry {
     /// inode number
@@ -38,7 +38,7 @@ impl DirectoryEntry {
     }
 }
 
-#[derive(Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct DirectoryName([u8; 30]);
 
 impl TryFrom<&CStr> for DirectoryName {

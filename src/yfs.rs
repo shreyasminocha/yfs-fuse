@@ -158,15 +158,9 @@ impl<S: YfsStorage> Yfs<S> {
         parent_inum: InodeNumber,
         name: &CStr,
     ) -> Result<Option<InodeNumber>> {
-        let inum = self.read_directory(parent_inum)?.iter().find_map(|entry| {
-            if CString::from(&entry.name) == name.to_owned() {
-                Some(entry.inum as InodeNumber)
-            } else {
-                None
-            }
-        });
-
-        Ok(inum)
+        Ok(self
+            .lookup_directory_entry(parent_inum, name)?
+            .map(|(_, entry)| entry.inum as InodeNumber))
     }
 
     pub fn read_directory(&self, inum: InodeNumber) -> Result<Vec<DirectoryEntry>> {
@@ -273,6 +267,53 @@ impl<S: YfsStorage> Yfs<S> {
         Ok(new_inum)
     }
 
+    pub fn remove_directory(
+        &mut self,
+        parent_inum: InodeNumber,
+        name: &CStr,
+    ) -> Result<InodeNumber> {
+        let (entry_offset, entry) = self
+            .lookup_directory_entry(parent_inum, name)?
+            .ok_or(anyhow!("entry does not exist: {name:?}"))?;
+
+        let entry_inum = entry.inum as InodeNumber;
+
+        let entry_inode = self.read_inode(entry_inum)?;
+        ensure!(
+            entry_inode.type_ == InodeType::Directory,
+            "can rmdir only directories"
+        );
+
+        let entry_chlidren = self.read_directory(entry_inum)?;
+        let entry_children: Vec<_> = entry_chlidren
+            .iter()
+            .filter(|child| {
+                let name = CString::from(&child.name);
+                let name: &CStr = &name;
+                name != c"." && name != c".."
+            })
+            .collect();
+        ensure!(
+            entry_children.is_empty(),
+            "cannot remove non-empty directories"
+        );
+
+        ensure!(entry_inum != ROOT_INODE, "cannot rmdir root directory");
+
+        self.write_file(
+            parent_inum,
+            entry_offset,
+            &bincode::serialize(&FREE_DIRECTORY_ENTRY)?,
+        )?;
+
+        // entry's '..' child no longer points to the parent
+        self.update_inode(parent_inum, |parent_inode| parent_inode.nlink -= 1)?;
+
+        self.delete_inode(entry_inum)?;
+
+        Ok(entry_inum)
+    }
+
     pub fn create_hard_link(
         &mut self,
         parent_inum: InodeNumber,
@@ -310,11 +351,8 @@ impl<S: YfsStorage> Yfs<S> {
             "cannot remove '.' and '..' entries"
         );
 
-        let entries = self.read_directory_entries(parent_inum)?;
-        let (entry_index, entry) = entries
-            .iter()
-            .enumerate()
-            .find(|(_, entry)| CString::from(&entry.name) == name.into())
+        let (entry_offset, entry) = self
+            .lookup_directory_entry(parent_inum, name)?
             .ok_or(anyhow!("entry does not exist: {name:?}"))?;
 
         let entry_inum = entry.inum as InodeNumber;
@@ -325,10 +363,9 @@ impl<S: YfsStorage> Yfs<S> {
             "can unlink only regular files"
         );
 
-        let offset = entry_index * DIRECTORY_ENTRY_SIZE;
         self.write_file(
             parent_inum,
-            offset,
+            entry_offset,
             &bincode::serialize(&FREE_DIRECTORY_ENTRY)?,
         )?;
 
@@ -446,6 +483,25 @@ impl<S: YfsStorage> Yfs<S> {
             .map(bincode::deserialize::<DirectoryEntry>)
             .collect::<Result<Vec<_>, _>>()
             .map_err(|err| err.into())
+    }
+
+    fn lookup_directory_entry(
+        &self,
+        parent_inum: InodeNumber,
+        name: &CStr,
+    ) -> Result<Option<(usize, DirectoryEntry)>> {
+        // we use `read_directory_entries` rather than `read_directory` because the latter may
+        // result in incorrect offsets because of its filtering
+        let entries = self.read_directory_entries(parent_inum)?;
+        let index_entry = entries
+            .into_iter()
+            .enumerate()
+            .filter(|(_, entry)| entry.inum != 0)
+            .find(|(_, entry)| CString::from(&entry.name) == name.into());
+        let offset_entry =
+            index_entry.map(|(entry_index, entry)| (entry_index * DIRECTORY_ENTRY_SIZE, entry));
+
+        Ok(offset_entry)
     }
 
     /// Frees any allocated blocks and writes a free inode in place of the original inode.
@@ -879,10 +935,33 @@ mod tests {
         fn test_directory_free_entries() {}
 
         #[test]
-        fn test_directory_nlinks() {}
+        fn test_directory_nlink() {}
 
         #[test]
-        fn test_parent_directory_nlinks() {}
+        fn test_parent_directory_nlink() {}
+    }
+
+    mod remove_directory {
+        #[test]
+        fn test_parent_inode_type() {}
+
+        #[test]
+        fn test_entry_inode_type() {}
+
+        #[test]
+        fn test_missing_entry() {}
+
+        #[test]
+        fn test_rmdir_non_empty_directory() {}
+
+        #[test]
+        fn test_rmdir_root_directory() {}
+
+        #[test]
+        fn test_rmdir_empty_directory() {}
+
+        #[test]
+        fn test_parent_directory_nlink() {}
     }
 
     mod create_hard_link {

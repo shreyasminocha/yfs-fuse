@@ -151,6 +151,12 @@ impl<S: YfsStorage> YfsFs<S> {
         Ok(attr)
     }
 
+    fn remove_directory(&mut self, parent_inum: InodeNumber, name: &CStr) -> Result<()> {
+        let _ = self.yfs.remove_directory(parent_inum, name)?;
+
+        Ok(())
+    }
+
     fn create_hard_link(
         &mut self,
         parent_inum: InodeNumber,
@@ -397,6 +403,19 @@ impl<S: YfsStorage> Filesystem for YfsFs<S> {
         };
 
         if self.remove_hard_link(parent as InodeNumber, &name).is_ok() {
+            reply.ok();
+        } else {
+            reply.error(EINVAL);
+        }
+    }
+
+    fn rmdir(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEmpty) {
+        let Ok(name) = CString::new(name.as_bytes()) else {
+            reply.error(EINVAL);
+            return;
+        };
+
+        if self.remove_directory(parent as InodeNumber, &name).is_ok() {
             reply.ok();
         } else {
             reply.error(EINVAL);
