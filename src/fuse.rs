@@ -7,13 +7,17 @@ use std::time::Duration;
 use anyhow::{anyhow, ensure, Result};
 use fuser::{
     FileAttr, FileType, Filesystem, ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory, ReplyEmpty,
-    ReplyEntry, ReplyOpen, ReplyWrite, Request,
+    ReplyEntry, ReplyOpen, ReplyStatfs, ReplyWrite, Request,
 };
 use libc::{EINVAL, ENOENT};
 use log::warn;
 
 use crate::{
-    disk_format::{block::BLOCK_SIZE, directory_entry::DirectoryEntry, inode::InodeType},
+    disk_format::{
+        block::BLOCK_SIZE,
+        directory_entry::{DirectoryEntry, MAX_NAME_LEN},
+        inode::InodeType,
+    },
     storage::YfsStorage,
     yfs::{InodeNumber, Yfs},
 };
@@ -221,6 +225,22 @@ impl<S: YfsStorage> YfsFs<S> {
 }
 
 impl<S: YfsStorage> Filesystem for YfsFs<S> {
+    fn statfs(&mut self, _req: &Request<'_>, _ino: u64, reply: ReplyStatfs) {
+        let num_free_blocks = self.yfs.num_free_blocks();
+        let num_free_inodes = self.yfs.num_free_inodes();
+
+        reply.statfs(
+            self.yfs.num_blocks as u64,
+            num_free_blocks as u64,
+            num_free_blocks as u64,
+            self.yfs.num_inodes as u64,
+            num_free_inodes as u64,
+            BLOCK_SIZE as u32,
+            MAX_NAME_LEN as u32,
+            BLOCK_SIZE as u32,
+        );
+    }
+
     fn lookup(&mut self, _req: &Request, parent: u64, name: &OsStr, reply: ReplyEntry) {
         let Ok(name) = CString::new(name.as_bytes()) else {
             reply.error(EINVAL);

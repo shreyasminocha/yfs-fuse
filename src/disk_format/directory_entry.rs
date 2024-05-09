@@ -15,6 +15,9 @@ const_assert!(size_of::<DirectoryEntry>() == DIRECTORY_ENTRY_SIZE);
 const_assert!(BLOCK_SIZE % DIRECTORY_ENTRY_SIZE == 0);
 pub const DIRECTORY_ENTRIES_PER_BLOCK: usize = BLOCK_SIZE / DIRECTORY_ENTRY_SIZE;
 
+pub const MAX_NAME_LEN: usize = 30;
+const_assert!(size_of::<DirectoryEntryName>() == MAX_NAME_LEN);
+
 pub const FREE_DIRECTORY_ENTRY: DirectoryEntry = DirectoryEntry {
     inum: 0,
     name: DirectoryEntryName([0; 30]),

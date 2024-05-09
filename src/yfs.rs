@@ -440,6 +440,14 @@ impl<S: YfsStorage> Yfs<S> {
         self.read_file(inum, 0, inode.size as usize)
     }
 
+    pub fn num_free_blocks(&self) -> usize {
+        self.block_bitmap.count_zeros()
+    }
+
+    pub fn num_free_inodes(&self) -> usize {
+        self.inode_bitmap.count_zeros()
+    }
+
     pub fn read_inode(&self, inum: InodeNumber) -> Result<Inode> {
         if inum == 0 {
             bail!("invalid inode number: {inum}");
