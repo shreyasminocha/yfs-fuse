@@ -1,6 +1,7 @@
 use std::ffi::{CStr, CString, OsStr};
 use std::ops::ControlFlow;
 use std::os::unix::ffi::OsStrExt;
+use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{anyhow, ensure, Result};
@@ -55,7 +56,7 @@ impl<S: YfsStorage> YfsFs<S> {
             kind: match inode.type_ {
                 InodeType::Directory => FileType::Directory,
                 InodeType::Regular => FileType::RegularFile,
-                InodeType::Symlink => unimplemented!("symlink support is unimplemented"),
+                InodeType::Symlink => FileType::Symlink,
                 InodeType::Free => unreachable!("we handle this case above"),
             },
             perm: 0o755,
@@ -198,6 +199,25 @@ impl<S: YfsStorage> YfsFs<S> {
         self.yfs
             .rename(parent_inum, name, new_parent_inum, new_name)
     }
+
+    fn create_symbolic_link(
+        &mut self,
+        parent_inum: InodeNumber,
+        name: &CStr,
+        link: &CStr,
+    ) -> Result<FileAttr> {
+        let new_inum = self.yfs.create_symbolic_link(parent_inum, name, link)?;
+
+        let attr = self
+            .get_attributes(new_inum)?
+            .expect("we just created the symbolic link");
+
+        Ok(attr)
+    }
+
+    fn read_symbolic_link(&mut self, inum: InodeNumber) -> Result<Vec<u8>> {
+        self.yfs.read_symbolic_link(inum)
+    }
 }
 
 impl<S: YfsStorage> Filesystem for YfsFs<S> {
@@ -293,12 +313,12 @@ impl<S: YfsStorage> Filesystem for YfsFs<S> {
             .enumerate()
             .try_for_each(|(i, (entry, inode_type))| {
                 let file_type = match inode_type {
-                    InodeType::Regular => FileType::RegularFile,
                     InodeType::Directory => FileType::Directory,
+                    InodeType::Regular => FileType::RegularFile,
+                    InodeType::Symlink => FileType::Symlink,
                     InodeType::Free => {
                         unreachable!("we filtered these in `self.read_directory`")
                     }
-                    InodeType::Symlink => unimplemented!("symlink support is unimplemented"),
                 };
 
                 let is_buffer_full = reply.add(
@@ -463,6 +483,39 @@ impl<S: YfsStorage> Filesystem for YfsFs<S> {
             .is_ok()
         {
             reply.ok();
+        } else {
+            reply.error(EINVAL);
+        }
+    }
+
+    fn symlink(
+        &mut self,
+        _req: &Request<'_>,
+        parent: u64,
+        name: &OsStr,
+        link: &Path,
+        reply: ReplyEntry,
+    ) {
+        let Ok(name) = CString::new(name.as_bytes()) else {
+            reply.error(EINVAL);
+            return;
+        };
+
+        let Ok(link) = CString::new(link.as_os_str().as_bytes()) else {
+            reply.error(EINVAL);
+            return;
+        };
+
+        if let Ok(attr) = self.create_symbolic_link(parent as InodeNumber, &name, &link) {
+            reply.entry(&Self::TTL, &attr, Self::GENERATION);
+        } else {
+            reply.error(EINVAL);
+        }
+    }
+
+    fn readlink(&mut self, _req: &Request<'_>, ino: u64, reply: ReplyData) {
+        if let Ok(data) = self.read_symbolic_link(ino as InodeNumber) {
+            reply.data(&data);
         } else {
             reply.error(EINVAL);
         }

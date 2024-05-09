@@ -57,8 +57,7 @@ impl Inode {
             nlink: match type_ {
                 InodeType::Free => 0,
                 InodeType::Directory => 2,
-                InodeType::Regular => 1,
-                InodeType::Symlink => unimplemented!("symlink support is unimplemented"),
+                InodeType::Regular | InodeType::Symlink => 1,
             },
             reuse,
             size: 0,

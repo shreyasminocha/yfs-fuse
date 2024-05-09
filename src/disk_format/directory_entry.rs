@@ -17,7 +17,7 @@ pub const DIRECTORY_ENTRIES_PER_BLOCK: usize = BLOCK_SIZE / DIRECTORY_ENTRY_SIZE
 
 pub const FREE_DIRECTORY_ENTRY: DirectoryEntry = DirectoryEntry {
     inum: 0,
-    name: DirectoryName([0; 30]),
+    name: DirectoryEntryName([0; 30]),
 };
 
 #[derive(Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -26,7 +26,7 @@ pub struct DirectoryEntry {
     /// inode number
     pub inum: i16,
     /// file name (not null-terminated)
-    pub name: DirectoryName,
+    pub name: DirectoryEntryName,
 }
 
 impl DirectoryEntry {
@@ -39,9 +39,9 @@ impl DirectoryEntry {
 }
 
 #[derive(Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct DirectoryName([u8; 30]);
+pub struct DirectoryEntryName([u8; 30]);
 
-impl TryFrom<&CStr> for DirectoryName {
+impl TryFrom<&CStr> for DirectoryEntryName {
     type Error = anyhow::Error;
 
     fn try_from(value: &CStr) -> Result<Self, Self::Error> {
@@ -53,12 +53,12 @@ impl TryFrom<&CStr> for DirectoryName {
         let mut converted = [0; 30];
         converted[0..bytes.len()].copy_from_slice(bytes);
 
-        Ok(DirectoryName(converted))
+        Ok(DirectoryEntryName(converted))
     }
 }
 
-impl From<&DirectoryName> for CString {
-    fn from(val: &DirectoryName) -> Self {
+impl From<&DirectoryEntryName> for CString {
+    fn from(val: &DirectoryEntryName) -> Self {
         let mut bytes = val.0.to_vec();
         bytes.push(0); // add a nul byte in case there are none
 
@@ -66,7 +66,7 @@ impl From<&DirectoryName> for CString {
     }
 }
 
-impl fmt::Display for DirectoryName {
+impl fmt::Display for DirectoryEntryName {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let cstr = CString::from(self);
         let Ok(string) = cstr.into_string() else {

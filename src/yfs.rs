@@ -5,16 +5,17 @@ use anyhow::{anyhow, bail, ensure, Context, Result};
 use bitvec::vec::BitVec;
 use log::{info, warn};
 
-use crate::disk_format::directory_entry::{DIRECTORY_ENTRIES_PER_BLOCK, FREE_DIRECTORY_ENTRY};
-use crate::disk_format::inode::FREE_INODE;
 use crate::{
     disk_format::{
         block::{Block, BLOCK_SIZE},
-        directory_entry::{DirectoryEntry, DirectoryName, DIRECTORY_ENTRY_SIZE},
+        directory_entry::{
+            DirectoryEntry, DirectoryEntryName, DIRECTORY_ENTRIES_PER_BLOCK, DIRECTORY_ENTRY_SIZE,
+            FREE_DIRECTORY_ENTRY,
+        },
         header::{FileSystemHeader, FS_HEADER_BLOCK_NUMBER},
         inode::{
-            Inode, InodeType, INODES_PER_BLOCK, INODE_SIZE, INODE_START_POSITION, MAX_FILE_SIZE,
-            NUM_DIRECT, NUM_INDIRECT, ROOT_INODE,
+            Inode, InodeType, FREE_INODE, INODES_PER_BLOCK, INODE_SIZE, INODE_START_POSITION,
+            MAX_FILE_SIZE, NUM_DIRECT, NUM_INDIRECT, ROOT_INODE,
         },
     },
     storage::YfsStorage,
@@ -324,8 +325,8 @@ impl<S: YfsStorage> Yfs<S> {
 
         let mut inode = self.read_inode(inum)?;
         ensure!(
-            inode.type_ == InodeType::Regular,
-            "can create hard links to regular files only"
+            [InodeType::Regular, InodeType::Symlink].contains(&inode.type_),
+            "can create hard links to regular files and symlinks only"
         );
 
         let new_entry = DirectoryEntry::new(inum as i16, name)?;
@@ -355,8 +356,8 @@ impl<S: YfsStorage> Yfs<S> {
         let mut entry_inode = self.read_inode(entry_inum)?;
 
         ensure!(
-            entry_inode.type_ == InodeType::Regular,
-            "can unlink only regular files"
+            [InodeType::Regular, InodeType::Symlink].contains(&entry_inode.type_),
+            "can unlink only regular files and symlinks"
         );
 
         self.remove_entry_at_offset(parent_inum, entry_offset)?;
@@ -415,6 +416,28 @@ impl<S: YfsStorage> Yfs<S> {
         self.remove_entry_at_offset(source_parent_inum, source_entry_offset)?;
 
         Ok(())
+    }
+
+    pub fn create_symbolic_link(
+        &mut self,
+        parent_inum: InodeNumber,
+        name: &CStr,
+        link: &CStr,
+    ) -> Result<InodeNumber> {
+        let new_inum = self.create(parent_inum, name, InodeType::Symlink)?;
+        self.write_file(new_inum, 0, link.to_bytes())?;
+
+        Ok(new_inum)
+    }
+
+    pub fn read_symbolic_link(&mut self, inum: InodeNumber) -> Result<Vec<u8>> {
+        let inode = self.read_inode(inum)?;
+        ensure!(
+            inode.type_ == InodeType::Symlink,
+            "can read symlink only from a symlink"
+        );
+
+        self.read_file(inum, 0, inode.size as usize)
     }
 
     pub fn read_inode(&self, inum: InodeNumber) -> Result<Inode> {
@@ -819,7 +842,7 @@ impl<S: YfsStorage> Yfs<S> {
 
                     if entry.inum == 0 {
                         // "free directory entry"
-                        if entry.name != DirectoryName::default() {
+                        if entry.name != DirectoryEntryName::default() {
                             warn!("free directory entry has non-empty name");
                         }
 
@@ -1136,5 +1159,51 @@ mod tests {
 
         #[test]
         fn test_nlink_unchanged() {}
+    }
+
+    mod create_symbolic_link {
+        #[test]
+        fn test_invalid_parent_inode() {}
+
+        #[test]
+        fn test_empty_link() {}
+
+        #[test]
+        fn test_link_relative_path() {}
+
+        #[test]
+        fn test_link_absolute_path() {}
+
+        #[test]
+        fn test_link_non_existent_path() {}
+
+        #[test]
+        fn test_link_regular_file() {}
+
+        #[test]
+        fn test_link_directory() {}
+
+        #[test]
+        fn test_link_symbolic_link() {}
+
+        #[test]
+        fn test_file_size() {}
+
+        #[test]
+        fn test_file_no_trailing_nul() {}
+    }
+
+    mod read_symbolic_link {
+        #[test]
+        fn test_invalid_inum() {}
+
+        #[test]
+        fn test_non_symlink() {}
+
+        #[test]
+        fn test_non_existent_path() {}
+
+        #[test]
+        fn test_long_path() {}
     }
 }
