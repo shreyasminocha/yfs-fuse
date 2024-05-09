@@ -376,7 +376,7 @@ impl<S: YfsStorage> Yfs<S> {
         Ok(())
     }
 
-    fn update_inode<F>(&self, inum: InodeNumber, mut update_inode: F) -> Result<()>
+    pub fn update_inode<F>(&self, inum: InodeNumber, mut update_inode: F) -> Result<()>
     where
         F: FnMut(&mut Inode),
     {

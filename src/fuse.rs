@@ -1,12 +1,12 @@
 use std::ffi::{CStr, CString, OsStr};
 use std::ops::ControlFlow;
 use std::os::unix::ffi::OsStrExt;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use anyhow::{anyhow, ensure, Result};
 use fuser::{
     FileAttr, FileType, Filesystem, ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory, ReplyEmpty,
-    ReplyEntry, ReplyOpen, ReplyWrite, Request, TimeOrNow,
+    ReplyEntry, ReplyOpen, ReplyWrite, Request,
 };
 use libc::{EINVAL, ENOENT};
 use log::warn;
@@ -19,7 +19,6 @@ use crate::{
 
 pub struct YfsFs<S: YfsStorage> {
     yfs: Yfs<S>,
-    attributes: Vec<Option<FileAttr>>,
     first_free_handle: u64,
 }
 
@@ -28,57 +27,55 @@ impl<S: YfsStorage> YfsFs<S> {
     const GENERATION: u64 = 1;
 
     pub fn new(yfs: Yfs<S>) -> Result<YfsFs<S>> {
-        let mut attributes = vec![None];
-
-        for inum in 1..=yfs.num_inodes {
-            attributes.push(Self::inode_to_attr(&yfs, inum as InodeNumber)?);
-        }
-
         Ok(YfsFs {
             yfs,
-            attributes,
             first_free_handle: 0,
         })
     }
 
-    fn get_attributes(&self, inum: InodeNumber) -> Option<FileAttr> {
-        self.attributes[inum as usize]
-    }
+    /// Sets uid and gid to 0. Sets permissions to 755.
+    fn get_attributes(&self, inum: InodeNumber) -> Result<Option<FileAttr>> {
+        let inode = self.yfs.read_inode(inum)?;
 
-    fn set_attributes(
-        &mut self,
-        inum: InodeNumber,
-        size: Option<u64>,
-        atime: Option<fuser::TimeOrNow>,
-        mtime: Option<fuser::TimeOrNow>,
-        ctime: Option<std::time::SystemTime>,
-    ) -> Result<FileAttr> {
-        let attr =
-            &mut self.attributes[inum as usize].ok_or(anyhow!("unable to access attributes"))?;
-
-        if let Some(new_size) = size {
-            let mut inode = self.yfs.read_inode(inum)?;
-            inode.size = new_size as i32;
-            self.yfs.write_inode(inum, inode)?;
-
-            attr.size = new_size;
+        if inode.type_ == InodeType::Free {
+            return Ok(None);
         }
 
-        attr.atime = atime
-            .map(|t| match t {
-                TimeOrNow::SpecificTime(time) => time,
-                TimeOrNow::Now => SystemTime::now(),
-            })
-            .unwrap_or(attr.atime);
-        attr.mtime = mtime
-            .map(|t| match t {
-                TimeOrNow::SpecificTime(time) => time,
-                TimeOrNow::Now => SystemTime::now(),
-            })
-            .unwrap_or(attr.mtime);
-        attr.ctime = ctime.unwrap_or(attr.ctime);
+        let time_metadata = self.yfs.storage.time_metadata().unwrap_or_default();
+        let ownership_metadata = self.yfs.storage.ownership_metadata().unwrap_or_default();
 
-        Ok(*attr)
+        Ok(Some(FileAttr {
+            ino: inum as u64,
+            size: inode.size as u64,
+            blocks: inode.size.div_ceil(BLOCK_SIZE as i32) as u64,
+            atime: time_metadata.atime,
+            mtime: time_metadata.mtime,
+            ctime: time_metadata.mtime,
+            crtime: time_metadata.crtime,
+            kind: match inode.type_ {
+                InodeType::Directory => FileType::Directory,
+                InodeType::Regular => FileType::RegularFile,
+                InodeType::Symlink => unimplemented!("symlink support is unimplemented"),
+                InodeType::Free => unreachable!("we handle this case above"),
+            },
+            perm: 0o755,
+            nlink: inode.nlink as u32,
+            uid: ownership_metadata.uid,
+            gid: ownership_metadata.gid,
+            rdev: 0,
+            flags: 0,
+            blksize: BLOCK_SIZE as u32,
+        }))
+    }
+
+    fn set_attributes(&mut self, inum: InodeNumber, size: Option<u64>) -> Result<FileAttr> {
+        if let Some(new_size) = size {
+            self.yfs
+                .update_inode(inum, |inode| inode.size = new_size as i32)?;
+        }
+
+        self.get_attributes(inum)
+            .map(|attr| attr.expect("we just successfully updated its size, so it must exist"))
     }
 
     fn open_file(&mut self, _inum: InodeNumber) -> u64 {
@@ -94,7 +91,7 @@ impl<S: YfsStorage> YfsFs<S> {
         let attr = match entry_inum {
             None => None,
             Some(inum) => Some(
-                self.get_attributes(inum)
+                self.get_attributes(inum)?
                     .ok_or(anyhow!("entry points to inum without attributes: {}", inum))?,
             ),
         };
@@ -132,32 +129,26 @@ impl<S: YfsStorage> YfsFs<S> {
 
     fn write_file(&mut self, inum: InodeNumber, offset: usize, data: &[u8]) -> Result<u32> {
         let write_len = self.yfs.write_file(inum, offset, data)?;
-
-        let attr = Self::inode_to_attr(&self.yfs, inum)?;
-        self.attributes[inum as usize] = attr;
-
         Ok(write_len as u32)
     }
 
     fn create_file(&mut self, parent_inum: InodeNumber, name: &CStr) -> Result<FileAttr> {
         let new_inum = self.yfs.create_file(parent_inum, name)?;
+        let attr = self
+            .get_attributes(new_inum)?
+            .expect("we just created the file");
 
-        let attr = Self::inode_to_attr(&self.yfs, new_inum)?;
-        self.attributes[new_inum as usize] = attr;
-
-        Ok(attr.expect("we just created the file"))
+        Ok(attr)
     }
 
     fn create_directory(&mut self, parent_inum: InodeNumber, name: &CStr) -> Result<FileAttr> {
         let new_inum = self.yfs.create_directory(parent_inum, name)?;
 
-        let attr = Self::inode_to_attr(&self.yfs, new_inum)?;
-        self.attributes[new_inum as usize] = attr;
+        let attr = self
+            .get_attributes(new_inum)?
+            .expect("we just created the directory");
 
-        let parent_attr = Self::inode_to_attr(&self.yfs, parent_inum)?;
-        self.attributes[parent_inum as usize] = parent_attr;
-
-        Ok(attr.expect("we just created the directory"))
+        Ok(attr)
     }
 
     fn create_hard_link(
@@ -168,59 +159,20 @@ impl<S: YfsStorage> YfsFs<S> {
     ) -> Result<FileAttr> {
         self.yfs.create_hard_link(parent_inum, name, inum)?;
 
-        // we update the attributes to reflect the new `nlink`
-        let attr = Self::inode_to_attr(&self.yfs, inum)?;
-        self.attributes[inum as usize] = attr;
+        let attr = self
+            .get_attributes(inum)?
+            .expect("we successfully created a link to the inode, so it must exist");
 
-        Ok(attr.expect("we successfully created a link to the inode, so it must exist"))
+        Ok(attr)
     }
 
     fn remove_hard_link(&mut self, parent_inum: InodeNumber, name: &CStr) -> Result<()> {
         let entry_inum = self.yfs.remove_hard_link(parent_inum, name)?;
 
-        // we update the attributes to reflect the new `nlink`
-        let attr = Self::inode_to_attr(&self.yfs, entry_inum)?;
+        let attr = self.get_attributes(entry_inum)?;
         ensure!(attr.is_none(), "we just removed the entry");
-        self.attributes[entry_inum as usize] = attr;
 
         Ok(())
-    }
-
-    /// Converts an inode to a fuse FileAttr.
-    ///
-    /// Sets uid and gid to 0. Sets permissions to 755.
-    fn inode_to_attr(yfs: &Yfs<S>, inum: InodeNumber) -> Result<Option<FileAttr>> {
-        let inode = yfs.read_inode(inum)?;
-
-        if inode.type_ == InodeType::Free {
-            return Ok(None);
-        }
-
-        let time_metadata = yfs.storage.time_metadata().unwrap_or_default();
-        let ownership_metadata = yfs.storage.ownership_metadata().unwrap_or_default();
-
-        Ok(Some(FileAttr {
-            ino: inum as u64,
-            size: inode.size as u64,
-            blocks: inode.size.div_ceil(BLOCK_SIZE as i32) as u64,
-            atime: time_metadata.atime,
-            mtime: time_metadata.mtime,
-            ctime: time_metadata.mtime,
-            crtime: time_metadata.crtime,
-            kind: match inode.type_ {
-                InodeType::Directory => FileType::Directory,
-                InodeType::Regular => FileType::RegularFile,
-                InodeType::Symlink => unimplemented!("symlink support is unimplemented"),
-                InodeType::Free => unreachable!("we handle this case above"),
-            },
-            perm: 0o755,
-            nlink: inode.nlink as u32,
-            uid: ownership_metadata.uid,
-            gid: ownership_metadata.gid,
-            rdev: 0,
-            flags: 0,
-            blksize: BLOCK_SIZE as u32,
-        }))
     }
 
     fn assign_file_handle(&mut self) -> u64 {
@@ -256,7 +208,7 @@ impl<S: YfsStorage> Filesystem for YfsFs<S> {
     }
 
     fn getattr(&mut self, _req: &Request, ino: u64, reply: ReplyAttr) {
-        if let Some(attr) = self.get_attributes(ino as InodeNumber) {
+        if let Ok(Some(attr)) = self.get_attributes(ino as InodeNumber) {
             reply.attr(&Self::TTL, &attr);
         } else {
             reply.error(EINVAL);
@@ -271,9 +223,9 @@ impl<S: YfsStorage> Filesystem for YfsFs<S> {
         _uid: Option<u32>,
         _gid: Option<u32>,
         size: Option<u64>,
-        atime: Option<fuser::TimeOrNow>,
-        mtime: Option<fuser::TimeOrNow>,
-        ctime: Option<std::time::SystemTime>,
+        _atime: Option<fuser::TimeOrNow>,
+        _mtime: Option<fuser::TimeOrNow>,
+        _ctime: Option<std::time::SystemTime>,
         _fh: Option<u64>,
         _crtime: Option<std::time::SystemTime>,
         _chgtime: Option<std::time::SystemTime>,
@@ -281,7 +233,7 @@ impl<S: YfsStorage> Filesystem for YfsFs<S> {
         _flags: Option<u32>,
         reply: ReplyAttr,
     ) {
-        if let Ok(attr) = self.set_attributes(ino as InodeNumber, size, atime, mtime, ctime) {
+        if let Ok(attr) = self.set_attributes(ino as InodeNumber, size) {
             reply.attr(&Self::TTL, &attr);
         } else {
             reply.error(ENOENT);
