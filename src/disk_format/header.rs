@@ -21,5 +21,17 @@ pub struct FileSystemHeader {
     /// The number of inodes in the underlying disk.
     pub num_inodes: i32,
     /// Padding to make the struct occupy exactly as many bytes as [`INODE_SIZE`].
-    pub padding: [i32; 14],
+    padding: [i32; 14],
+}
+
+impl FileSystemHeader {
+    /// Constructs a new instance of [`FileSystemHeader`].
+    #[must_use]
+    pub fn new(num_blocks: i32, num_inodes: i32) -> Self {
+        Self {
+            num_blocks,
+            num_inodes,
+            padding: [0; 14],
+        }
+    }
 }

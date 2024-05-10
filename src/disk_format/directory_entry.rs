@@ -51,6 +51,7 @@ impl DirectoryEntry {
 ///
 /// A maximum of 30-byte-long names are supported.
 #[derive(Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[repr(C)]
 pub struct DirectoryEntryName([u8; 30]);
 
 impl TryFrom<&CStr> for DirectoryEntryName {

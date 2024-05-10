@@ -26,12 +26,12 @@ use crate::{
 
 // inode numbers are represented as `i16`s on the disk, but we use `u16`s for logical accuracy
 /// An inode number.
-pub type InodeNumber = u16;
+pub(crate) type InodeNumber = u16;
 
 // block numbers are represented as `132`s on the disk, but we use `usize`s to avoid littering
 // the code with casts.
 /// A block number.
-pub type BlockNumber = usize;
+pub(crate) type BlockNumber = usize;
 
 /// Implements YFS operations independent.
 pub struct Yfs<S: YfsStorage> {

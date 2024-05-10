@@ -6,12 +6,12 @@ macro_rules! const_assert {
 }
 
 /// YFS blocks.
-pub mod block;
+pub(crate) mod block;
 /// The YFS boot sector/block.
-pub mod boot_sector;
+pub(crate) mod boot_sector;
 /// Directory entries and entry names.
-pub mod directory_entry;
+pub(crate) mod directory_entry;
 /// The filesystem header.
-pub mod header;
+pub(crate) mod header;
 /// Inodes.
-pub mod inode;
+pub(crate) mod inode;

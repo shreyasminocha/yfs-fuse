@@ -36,11 +36,7 @@ impl<const I: usize, const D: usize> YfsDisk<I, D> {
     /// Constructs a new [`YfsDisk`] instance.
     #[must_use]
     pub fn new(boot_sector: Block, inodes: [Inode; I], data_blocks: [Block; D]) -> Self {
-        let file_system_header = FileSystemHeader {
-            num_blocks: Self::NUM_BLOCKS as i32,
-            num_inodes: I as i32,
-            padding: [0; 14],
-        };
+        let file_system_header = FileSystemHeader::new(Self::NUM_BLOCKS as i32, I as i32);
 
         Self {
             boot_sector,
@@ -119,7 +115,6 @@ mod tests {
 
         assert_eq!(yfs_disk.file_system_header.num_inodes, 1);
         assert_eq!(yfs_disk.file_system_header.num_blocks, 1 + 1 + 2);
-        assert_eq!(yfs_disk.file_system_header.padding, [0; 14]);
     }
 
     #[test]

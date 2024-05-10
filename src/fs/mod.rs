@@ -4,4 +4,4 @@ mod fuse;
 mod metadata;
 
 pub use fuse::YfsFs;
-pub use metadata::{OwnershipMetadata, TimeMetadata};
+pub(crate) use metadata::{OwnershipMetadata, TimeMetadata};
