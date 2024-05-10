@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use clap::Parser;
 
-use yfs::fuse::YfsFs;
+use yfs::fs::YfsFs;
 use yfs::storage::FileBackedStorage;
 use yfs::yfs::Yfs;
 

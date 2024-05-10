@@ -15,9 +15,7 @@
 /// Constants and structures that define the YFS disk format.
 mod disk_format;
 /// An implementation of a FUSE filesystem around YFS.
-pub mod fuse;
-/// Filesystem metadata structures.
-mod metadata;
+pub mod fs;
 /// Implementations of storage backends that support YFS-style block-based I/O.
 pub mod storage;
 /// Implementations of YFS operations.
