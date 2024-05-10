@@ -513,7 +513,7 @@ impl<S: YfsStorage> Filesystem for YfsFs<S> {
             return;
         };
 
-        let Ok(new_name) = CString::new(newname.as_bytes()) else {
+        let Ok(target_name) = CString::new(newname.as_bytes()) else {
             reply.error(EINVAL);
             return;
         };
@@ -523,7 +523,7 @@ impl<S: YfsStorage> Filesystem for YfsFs<S> {
                 parent as InodeNumber,
                 &name,
                 newparent as InodeNumber,
-                &new_name,
+                &target_name,
             )
             .is_ok()
         {

@@ -34,6 +34,7 @@ impl<const I: usize, const D: usize> YfsDisk<I, D> {
     pub const NUM_BLOCKS: usize = 1 + Self::NUM_INODE_BLOCKS + D;
 
     /// Constructs a new [`YfsDisk`] instance.
+    #[must_use]
     pub fn new(boot_sector: Block, inodes: [Inode; I], data_blocks: [Block; D]) -> Self {
         let file_system_header = FileSystemHeader {
             num_blocks: Self::NUM_BLOCKS as i32,
@@ -88,7 +89,7 @@ impl<const I: usize, const D: usize> YfsStorage for YfsDisk<I, D> {
         Ok(block)
     }
 
-    fn write_block(&self, _block_number: BlockNumber, _block: Block) -> Result<()> {
+    fn write_block(&self, _block_number: BlockNumber, _block: &Block) -> Result<()> {
         todo!("implement block writing")
     }
 }

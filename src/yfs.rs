@@ -1,5 +1,8 @@
-use std::collections::{HashMap, HashSet};
 use std::ffi::{CStr, CString};
+use std::{
+    collections::{HashMap, HashSet},
+    convert::Into,
+};
 
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use bitvec::vec::BitVec;
@@ -249,7 +252,7 @@ impl<S: YfsStorage> Yfs<S> {
             block[start_offset..end_position - block_start]
                 .copy_from_slice(&data[(position - offset)..(end_position - offset)]);
 
-            self.write_file_block(inode, block_index, block)?;
+            self.write_file_block(inode, block_index, &block)?;
 
             write_len += end_position - position;
             position = end_position;
@@ -355,7 +358,7 @@ impl<S: YfsStorage> Yfs<S> {
         );
 
         let new_entry = DirectoryEntry::new(inum as i16, name)?;
-        self.add_directory_entry(parent_inum, new_entry)?;
+        self.add_directory_entry(parent_inum, &new_entry)?;
 
         inode.nlink += 1;
         self.write_inode(inum, inode)?;
@@ -434,10 +437,10 @@ impl<S: YfsStorage> Yfs<S> {
                 inum,
                 ..existing_target_entry
             };
-            self.add_entry_at_offset(target_parent_inum, target_entry_offset, new_entry)?;
+            self.add_entry_at_offset(target_parent_inum, target_entry_offset, &new_entry)?;
         } else {
             let new_entry = DirectoryEntry::new(inum, target_name)?;
-            self.add_directory_entry(target_parent_inum, new_entry)?;
+            self.add_directory_entry(target_parent_inum, &new_entry)?;
         }
 
         // remove old entry
@@ -512,7 +515,7 @@ impl<S: YfsStorage> Yfs<S> {
         let mut block = self.storage.read_block(block_number)?;
         block[offset..offset + INODE_SIZE].copy_from_slice(&inode_serialized);
 
-        self.storage.write_block(block_number, block)?;
+        self.storage.write_block(block_number, &block)?;
 
         Ok(())
     }
@@ -551,7 +554,7 @@ impl<S: YfsStorage> Yfs<S> {
         let new_inode = Inode::new(inode_type, old_reuse + 1);
         self.write_inode(new_inum, new_inode)?;
 
-        self.add_directory_entry(parent_inum, new_entry)?;
+        self.add_directory_entry(parent_inum, &new_entry)?;
 
         Ok(new_inum)
     }
@@ -563,7 +566,7 @@ impl<S: YfsStorage> Yfs<S> {
     fn add_directory_entry(
         &mut self,
         parent_inum: InodeNumber,
-        entry: DirectoryEntry,
+        entry: &DirectoryEntry,
     ) -> Result<()> {
         let inode = self.read_inode(parent_inum)?;
         ensure!(
@@ -603,7 +606,7 @@ impl<S: YfsStorage> Yfs<S> {
         entry_chunks
             .map(bincode::deserialize::<DirectoryEntry>)
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|err| err.into())
+            .map_err(Into::into)
     }
 
     /// Looks for an entry with a given name in a directory. If found, it returns the entry along
@@ -632,16 +635,16 @@ impl<S: YfsStorage> Yfs<S> {
         &mut self,
         inum: InodeNumber,
         entry_offset: usize,
-        entry: DirectoryEntry,
+        entry: &DirectoryEntry,
     ) -> Result<()> {
-        self.write_file(inum, entry_offset, &bincode::serialize(&entry)?)?;
+        self.write_file(inum, entry_offset, &bincode::serialize(entry)?)?;
 
         Ok(())
     }
 
     /// Removes the entry from a directory at the given position in the directory file.
     fn remove_entry_at_offset(&mut self, inum: InodeNumber, entry_offset: usize) -> Result<()> {
-        self.add_entry_at_offset(inum, entry_offset, FREE_DIRECTORY_ENTRY)
+        self.add_entry_at_offset(inum, entry_offset, &FREE_DIRECTORY_ENTRY)
     }
 
     /// Frees any allocated blocks and writes a free inode in place of the original inode.
@@ -671,7 +674,7 @@ impl<S: YfsStorage> Yfs<S> {
         let new_num_blocks = new_size.div_ceil(BLOCK_SIZE);
 
         let mut i = 0;
-        for block_number in inode.direct.iter_mut() {
+        for block_number in &mut inode.direct {
             if i >= new_num_blocks {
                 break;
             }
@@ -695,7 +698,7 @@ impl<S: YfsStorage> Yfs<S> {
                         .ok_or(anyhow!("no more free blocks"))?;
 
                     self.storage
-                        .write_block(indirect_block_number, [0; BLOCK_SIZE])?;
+                        .write_block(indirect_block_number, &[0; BLOCK_SIZE])?;
 
                     inode.indirect = indirect_block_number as i32;
 
@@ -703,7 +706,7 @@ impl<S: YfsStorage> Yfs<S> {
                 }
             };
 
-            for block_number in indirect_block_numbers.iter_mut() {
+            for block_number in &mut indirect_block_numbers {
                 if i >= new_num_blocks {
                     break;
                 }
@@ -725,7 +728,7 @@ impl<S: YfsStorage> Yfs<S> {
                 .try_into()
                 .expect("NUM_INDIRECT = BLOCK_SIZE / 4. So, NUM_INDIRECT * 4 == BLOCK_SIZE");
             self.storage
-                .write_block(inode.indirect as BlockNumber, indirect_block)?;
+                .write_block(inode.indirect as BlockNumber, &indirect_block)?;
         }
 
         // update the inode with the new direct/indirect blocks
@@ -741,7 +744,7 @@ impl<S: YfsStorage> Yfs<S> {
     }
 
     /// Writes to the block at the requested index within a given file.
-    fn write_file_block(&self, inode: Inode, n: usize, block: Block) -> Result<()> {
+    fn write_file_block(&self, inode: Inode, n: usize, block: &Block) -> Result<()> {
         let block_number = self.get_file_block_number(inode, n)?;
         self.storage.write_block(block_number, block)
     }
@@ -853,6 +856,11 @@ impl<S: YfsStorage> Yfs<S> {
     /// Does not check for the validity of allocated blocks or block reuse. Some checks are
     /// exclusively performed in [`Self::new`].
     fn check_filesystem(&self) -> Result<()> {
+        /// The '.' entry, which refers to the current directory.
+        const DOT: &CStr = c".";
+        /// The '..' entry, which refers to the parent of the current directory.
+        const DOT_DOT: &CStr = c"..";
+
         let root_inode = self.read_inode(ROOT_INODE)?;
         if root_inode.type_ != InodeType::Directory {
             bail!("root inode does not represent a directory");
@@ -861,11 +869,6 @@ impl<S: YfsStorage> Yfs<S> {
         let mut queue = vec![ROOT_INODE];
         let mut seen_directories = HashSet::<InodeNumber>::new();
         let mut directory_parents = HashMap::from([(ROOT_INODE, ROOT_INODE)]);
-
-        /// The '.' entry, which refers to the current directory.
-        const DOT: &CStr = c".";
-        /// The '..' entry, which refers to the parent of the current directory.
-        const DOT_DOT: &CStr = c"..";
 
         while let Some(inum) = queue.pop() {
             let inode = self.read_inode(inum)?;

@@ -15,6 +15,7 @@ pub struct FileBackedStorage(File);
 
 impl FileBackedStorage {
     /// Constructs a new [`FileBackedStorage`] instance.
+    #[must_use]
     pub fn new(file: File) -> Self {
         FileBackedStorage(file)
     }
@@ -32,12 +33,12 @@ impl YfsStorage for FileBackedStorage {
         Ok(buf)
     }
 
-    fn write_block(&self, block_number: BlockNumber, block: Block) -> Result<()> {
+    fn write_block(&self, block_number: BlockNumber, block: &Block) -> Result<()> {
         let position = block_number * BLOCK_SIZE;
 
         // todo: deal with short writes
         self.0
-            .write_at(&block, position as u64)
+            .write_at(block, position as u64)
             .context("writing block")?;
 
         Ok(())
