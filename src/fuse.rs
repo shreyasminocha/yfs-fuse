@@ -22,15 +22,22 @@ use crate::{
     yfs::{InodeNumber, Yfs},
 };
 
+/// Wraps [`Yfs`] and exposes functions that can easily be used to implement FUSE operations.
+/// For instance, it uses FUSE's [`FileAttr`] abstraction and tracks file handles.
 pub struct YfsFs<S: YfsStorage> {
+    /// The underlying [`Yfs`] struct.
     yfs: Yfs<S>,
+    /// The lowest integer that has not been used as a file handle yet.
     first_free_handle: u64,
 }
 
 impl<S: YfsStorage> YfsFs<S> {
+    /// The "time-to-live" used for all entry responses.
     const TTL: Duration = Duration::new(1, 0);
+    /// The "generation" used for all entry responses.
     const GENERATION: u64 = 1;
 
+    /// Constructs a new [`YfsFs`] instance.
     pub fn new(yfs: Yfs<S>) -> Result<YfsFs<S>> {
         Ok(YfsFs {
             yfs,
@@ -38,6 +45,8 @@ impl<S: YfsStorage> YfsFs<S> {
         })
     }
 
+    /// Gets the attributes associated with an inode number.
+    ///
     /// Sets uid and gid to 0. Sets permissions to 755.
     fn get_attributes(&self, inum: InodeNumber) -> Result<Option<FileAttr>> {
         let inode = self.yfs.read_inode(inum)?;
@@ -73,6 +82,7 @@ impl<S: YfsStorage> YfsFs<S> {
         }))
     }
 
+    /// Sets the attributes associated with an inode number.
     fn set_attributes(&mut self, inum: InodeNumber, size: Option<u64>) -> Result<FileAttr> {
         if let Some(new_size) = size {
             self.yfs
@@ -83,14 +93,17 @@ impl<S: YfsStorage> YfsFs<S> {
             .map(|attr| attr.expect("we just successfully updated its size, so it must exist"))
     }
 
+    /// Opens a file and allocates it a file handle.
     fn open_file(&mut self, _inum: InodeNumber) -> u64 {
         self.assign_file_handle()
     }
 
+    /// Opens a directory and allocates it a file handle.
     fn open_directory(&mut self, _inum: InodeNumber) -> u64 {
         self.assign_file_handle()
     }
 
+    /// Looks up an entry within a directory.
     fn lookup_entry(&self, parent_inum: InodeNumber, name: &CStr) -> Result<Option<FileAttr>> {
         let entry_inum = self.yfs.lookup_entry(parent_inum, name)?;
         let attr = match entry_inum {
@@ -104,10 +117,12 @@ impl<S: YfsStorage> YfsFs<S> {
         Ok(attr)
     }
 
+    /// Reads a file.
     fn read_file(&self, inum: InodeNumber, offset: usize, size: usize) -> Result<Vec<u8>> {
         self.yfs.read_file(inum, offset, size)
     }
 
+    /// Reads a directory and returns its entries along with their inode types.
     fn read_directory(
         &self,
         inum: InodeNumber,
@@ -132,11 +147,13 @@ impl<S: YfsStorage> YfsFs<S> {
         Ok(directory_contents)
     }
 
+    /// Writes to a file.
     fn write_file(&mut self, inum: InodeNumber, offset: usize, data: &[u8]) -> Result<u32> {
         let write_len = self.yfs.write_file(inum, offset, data)?;
         Ok(write_len as u32)
     }
 
+    /// Creates a new file.
     fn create_file(&mut self, parent_inum: InodeNumber, name: &CStr) -> Result<FileAttr> {
         let new_inum = self.yfs.create_file(parent_inum, name)?;
         let attr = self
@@ -146,6 +163,7 @@ impl<S: YfsStorage> YfsFs<S> {
         Ok(attr)
     }
 
+    /// Creates a new directory.
     fn create_directory(&mut self, parent_inum: InodeNumber, name: &CStr) -> Result<FileAttr> {
         let new_inum = self.yfs.create_directory(parent_inum, name)?;
 
@@ -156,12 +174,14 @@ impl<S: YfsStorage> YfsFs<S> {
         Ok(attr)
     }
 
+    /// Removes a directory.
     fn remove_directory(&mut self, parent_inum: InodeNumber, name: &CStr) -> Result<()> {
         let _ = self.yfs.remove_directory(parent_inum, name)?;
 
         Ok(())
     }
 
+    /// Creates a hard link.
     fn create_hard_link(
         &mut self,
         parent_inum: InodeNumber,
@@ -177,6 +197,7 @@ impl<S: YfsStorage> YfsFs<S> {
         Ok(attr)
     }
 
+    /// Removes a hard link.
     fn remove_hard_link(&mut self, parent_inum: InodeNumber, name: &CStr) -> Result<()> {
         let entry_inum = self.yfs.remove_hard_link(parent_inum, name)?;
 
@@ -186,6 +207,7 @@ impl<S: YfsStorage> YfsFs<S> {
         Ok(())
     }
 
+    /// Allocates and returns a free file handle.
     fn assign_file_handle(&mut self) -> u64 {
         let assigned = self.first_free_handle;
         self.first_free_handle += 1;
@@ -193,6 +215,7 @@ impl<S: YfsStorage> YfsFs<S> {
         assigned
     }
 
+    /// Renames and/or moves an entry.
     fn rename_entry(
         &mut self,
         parent_inum: InodeNumber,
@@ -204,6 +227,7 @@ impl<S: YfsStorage> YfsFs<S> {
             .rename(parent_inum, name, new_parent_inum, new_name)
     }
 
+    /// Creates a symbolic link.
     fn create_symbolic_link(
         &mut self,
         parent_inum: InodeNumber,
@@ -219,6 +243,7 @@ impl<S: YfsStorage> YfsFs<S> {
         Ok(attr)
     }
 
+    /// Reads a symbolic link.
     fn read_symbolic_link(&mut self, inum: InodeNumber) -> Result<Vec<u8>> {
         self.yfs.read_symbolic_link(inum)
     }

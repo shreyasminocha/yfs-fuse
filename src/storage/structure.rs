@@ -11,21 +11,29 @@ use crate::{
 
 use super::yfs_storage::YfsStorage;
 
+/// A YFS disk with `I` inodes and `D` data blocks.
 pub struct YfsDisk<const I: usize, const D: usize> {
+    /// The boot block.
     boot_sector: Block,
+    /// The file system header.
     file_system_header: FileSystemHeader,
+    /// The inodes.
     pub inodes: [Inode; I],
+    /// The blocks that hold file data.
     pub data_blocks: [Block; D],
 }
 
 impl<const I: usize, const D: usize> YfsDisk<I, D> {
     // we add one because the first INODE_SIZE bytes in the first inode block are occupied by the
     // file system header
+    /// The number of blocks occupied by inodes.
     pub const NUM_INODE_BLOCKS: usize = (I + 1).div_ceil(INODES_PER_BLOCK);
 
-    // includes the boot sector, inode blocks, and data blocks
+    /// The total number of blocks in the disk including the boot block, blocks occupied by inodes,
+    /// and data blocks.
     pub const NUM_BLOCKS: usize = 1 + Self::NUM_INODE_BLOCKS + D;
 
+    /// Constructs a new [`YfsDisk`] instance.
     pub fn new(boot_sector: Block, inodes: [Inode; I], data_blocks: [Block; D]) -> Self {
         let file_system_header = FileSystemHeader {
             num_blocks: Self::NUM_BLOCKS as i32,
@@ -85,6 +93,7 @@ impl<const I: usize, const D: usize> YfsStorage for YfsDisk<I, D> {
     }
 }
 
+/// Serialize a slice of inodes.
 fn serialize_inodes(inodes: &[Inode]) -> Result<Vec<u8>> {
     Ok(inodes
         .iter()

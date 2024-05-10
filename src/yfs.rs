@@ -22,25 +22,36 @@ use crate::{
 };
 
 // inode numbers are represented as `i16`s on the disk, but we use `u16`s for logical accuracy
+/// An inode number.
 pub type InodeNumber = u16;
 
 // block numbers are represented as `132`s on the disk, but we use `usize`s to avoid littering
 // the code with casts.
+/// A block number.
 pub type BlockNumber = usize;
 
+/// Implements YFS operations independent.
 pub struct Yfs<S: YfsStorage> {
+    /// The abstraction that allows us to read and write sectors without worrying about where or how
+    /// sectors are persisted.
     pub storage: S,
+    /// The number of blocks in the disk, including the boot block, the filesystem header, blocks
+    /// occupied by the inode, and data blocks.
     pub num_blocks: usize,
+    /// The number of inodes in the disk.
     pub num_inodes: usize,
     /// Tracks the allocation status of blocks.
-    /// A value of `true` represents "occupied".
+    ///
+    /// A value of `true` or "one" represents "occupied" and vice-versa.
     block_bitmap: BitVec,
     /// Tracks the allocation status of inodes.
-    /// A value of `true` represents "occupied".
+    ///
+    /// A value of `true` or "one" represents "occupied" and vice-versa.
     inode_bitmap: BitVec,
 }
 
 impl<S: YfsStorage> Yfs<S> {
+    /// Constructs a new instance of [`Yfs`].
     pub fn new(storage: S) -> Result<Self> {
         let mut yfs = Self {
             storage,
@@ -154,6 +165,7 @@ impl<S: YfsStorage> Yfs<S> {
         Ok(yfs)
     }
 
+    /// Searches for an entry by name within a directory and, if found, returns its inode number.
     pub fn lookup_entry(
         &self,
         parent_inum: InodeNumber,
@@ -164,6 +176,8 @@ impl<S: YfsStorage> Yfs<S> {
             .map(|(_, entry)| entry.inum as InodeNumber))
     }
 
+    /// Returns the entries within a directory, excluding "free" entries, i.e. entries with the
+    /// inode number zero.
     pub fn read_directory(&self, inum: InodeNumber) -> Result<Vec<DirectoryEntry>> {
         Ok(self
             .read_directory_entries(inum)?
@@ -172,6 +186,9 @@ impl<S: YfsStorage> Yfs<S> {
             .collect())
     }
 
+    /// Reads at most `size` bytes of a file starting at `offset`.
+    ///
+    /// A `size` that is greater than the size of the file is not an error.
     pub fn read_file(&self, inum: InodeNumber, offset: usize, size: usize) -> Result<Vec<u8>> {
         info!("[inode #{inum}] reading file (offset = {offset}; size = {size})");
 
@@ -202,6 +219,8 @@ impl<S: YfsStorage> Yfs<S> {
         Ok(data)
     }
 
+    /// Writes `data` to a file starting at `offset`. Returns the number of bytes successfully
+    /// written.
     pub fn write_file(&mut self, inum: InodeNumber, offset: usize, data: &[u8]) -> Result<usize> {
         info!(
             "[inode #{inum}] writing file (offset = {offset}; data.len() = {})",
@@ -243,10 +262,13 @@ impl<S: YfsStorage> Yfs<S> {
         Ok(write_len)
     }
 
+    /// Creates a new regular file within a given parent directory.
     pub fn create_file(&mut self, parent_inum: InodeNumber, name: &CStr) -> Result<InodeNumber> {
         self.create(parent_inum, name, InodeType::Regular)
     }
 
+    /// Creates a new directory within a given parent directory. Sets up the new directory to
+    /// include the '.' and '..' entries.
     pub fn create_directory(
         &mut self,
         parent_inum: InodeNumber,
@@ -268,6 +290,8 @@ impl<S: YfsStorage> Yfs<S> {
         Ok(new_inum)
     }
 
+    /// Removes a directory from a given parent directory and frees the resources occupied by it.
+    /// The directory being removed *must* be empty except for the '.' and '..' entries.
     pub fn remove_directory(
         &mut self,
         parent_inum: InodeNumber,
@@ -311,6 +335,7 @@ impl<S: YfsStorage> Yfs<S> {
         Ok(entry_inum)
     }
 
+    /// Creates a hard link to a file within a given directory with a given name.
     pub fn create_hard_link(
         &mut self,
         parent_inum: InodeNumber,
@@ -338,6 +363,7 @@ impl<S: YfsStorage> Yfs<S> {
         Ok(())
     }
 
+    /// Removes a hard link from a directory.
     pub fn remove_hard_link(
         &mut self,
         parent_inum: InodeNumber,
@@ -372,6 +398,8 @@ impl<S: YfsStorage> Yfs<S> {
         Ok(entry_inum)
     }
 
+    /// Renames and/or moves a file or directory from a source parent-name pair to a target parent-
+    /// name pair. If the target already exists, it is replaced by the source.
     pub fn rename(
         &mut self,
         source_parent_inum: InodeNumber,
@@ -418,6 +446,8 @@ impl<S: YfsStorage> Yfs<S> {
         Ok(())
     }
 
+    /// Creates a symbolic link to a given (absolute or relative) path. The path is not checked
+    /// for validity.
     pub fn create_symbolic_link(
         &mut self,
         parent_inum: InodeNumber,
@@ -430,6 +460,7 @@ impl<S: YfsStorage> Yfs<S> {
         Ok(new_inum)
     }
 
+    /// Reads a given symbolic link and returns its contents (the target path) as a byte vector.
     pub fn read_symbolic_link(&mut self, inum: InodeNumber) -> Result<Vec<u8>> {
         let inode = self.read_inode(inum)?;
         ensure!(
@@ -440,14 +471,17 @@ impl<S: YfsStorage> Yfs<S> {
         self.read_file(inum, 0, inode.size as usize)
     }
 
+    /// Returns the number of free disk blocks.
     pub fn num_free_blocks(&self) -> usize {
         self.block_bitmap.count_zeros()
     }
 
+    /// Returns the number of free inodes.
     pub fn num_free_inodes(&self) -> usize {
         self.inode_bitmap.count_zeros()
     }
 
+    /// Reads the inode at a given inode number.
     pub fn read_inode(&self, inum: InodeNumber) -> Result<Inode> {
         if inum == 0 {
             bail!("invalid inode number: {inum}");
@@ -463,6 +497,7 @@ impl<S: YfsStorage> Yfs<S> {
         bincode::deserialize(inode).context("parsing inode")
     }
 
+    /// Writes to the inode at a given inode number.
     pub fn write_inode(&self, inum: InodeNumber, inode: Inode) -> Result<()> {
         if inum == 0 {
             bail!("invalid inode number: {inum}");
@@ -482,6 +517,8 @@ impl<S: YfsStorage> Yfs<S> {
         Ok(())
     }
 
+    /// Updates the inode at a given inode number with the changes made by the `update_inode`
+    /// function.
     pub fn update_inode<F>(&self, inum: InodeNumber, mut update_inode: F) -> Result<()>
     where
         F: FnMut(&mut Inode),
@@ -491,6 +528,8 @@ impl<S: YfsStorage> Yfs<S> {
         self.write_inode(inum, inode)
     }
 
+    /// Creates a new entity of type `inode_type` within a given parent directory with a given name.
+    /// It also allocates an inode for the new entity.
     fn create(
         &mut self,
         parent_inum: InodeNumber,
@@ -517,6 +556,10 @@ impl<S: YfsStorage> Yfs<S> {
         Ok(new_inum)
     }
 
+    /// Add a given entry to a directory.
+    ///
+    /// If it's available, it uses the first free entry in the directory. Else, it grows the
+    /// directory file to fit the new entry.
     fn add_directory_entry(
         &mut self,
         parent_inum: InodeNumber,
@@ -538,6 +581,11 @@ impl<S: YfsStorage> Yfs<S> {
         Ok(())
     }
 
+    /// Reads the entries within a directory.
+    ///
+    /// Unlike [`Self::read_directory`], it does not perform any filtering for free entries. This
+    /// makes it useful when, for example, the position of an entry in the directory file is
+    /// important.
     fn read_directory_entries(&self, inum: InodeNumber) -> Result<Vec<DirectoryEntry>> {
         let inode = self.read_inode(inum)?;
         ensure!(
@@ -558,6 +606,8 @@ impl<S: YfsStorage> Yfs<S> {
             .map_err(|err| err.into())
     }
 
+    /// Looks for an entry with a given name in a directory. If found, it returns the entry along
+    /// with its position in the directory file.
     fn lookup_directory_entry(
         &self,
         parent_inum: InodeNumber,
@@ -577,6 +627,7 @@ impl<S: YfsStorage> Yfs<S> {
         Ok(offset_entry)
     }
 
+    /// Adds an entry to a directory at the given position in the directory file.
     fn add_entry_at_offset(
         &mut self,
         inum: InodeNumber,
@@ -588,6 +639,7 @@ impl<S: YfsStorage> Yfs<S> {
         Ok(())
     }
 
+    /// Removes the entry from a directory at the given position in the directory file.
     fn remove_entry_at_offset(&mut self, inum: InodeNumber, entry_offset: usize) -> Result<()> {
         self.add_entry_at_offset(inum, entry_offset, FREE_DIRECTORY_ENTRY)
     }
@@ -682,17 +734,19 @@ impl<S: YfsStorage> Yfs<S> {
         Ok(())
     }
 
-    /// Reads the contents of the request block number of the inode.
+    /// Reads the block at the requested index within a given file.
     fn read_file_block(&self, inode: Inode, n: usize) -> Result<Block> {
         let block_number = self.get_file_block_number(inode, n)?;
         self.storage.read_block(block_number)
     }
 
+    /// Writes to the block at the requested index within a given file.
     fn write_file_block(&self, inode: Inode, n: usize, block: Block) -> Result<()> {
         let block_number = self.get_file_block_number(inode, n)?;
         self.storage.write_block(block_number, block)
     }
 
+    /// Converts a block index within a given file to the equivalent disk block number.
     fn get_file_block_number(&self, inode: Inode, n: usize) -> Result<BlockNumber> {
         if n > NUM_DIRECT + NUM_INDIRECT {
             bail!("block index exceeds maximum block count");
@@ -705,6 +759,11 @@ impl<S: YfsStorage> Yfs<S> {
             .ok_or(anyhow!("block index exceeds allocated block count"))?)
     }
 
+    /// Gets the block numbers of the blocks allocated for a given file.
+    ///
+    /// Currently, this reads blocks until it encounters a zero block number. However, the correct
+    /// behaviour would be to ignore block numbers beyond the minimal number of blocks needed to
+    /// represent the size of the file.
     fn get_inode_allocated_block_numbers(&self, inode: Inode) -> Result<Vec<BlockNumber>> {
         let direct_blocks = inode
             .direct
@@ -727,6 +786,8 @@ impl<S: YfsStorage> Yfs<S> {
         Ok([direct_blocks, indirect_blocks].concat())
     }
 
+    /// Interprets an inode's indirect block (if it exists) as an array of block numbers and returns
+    /// the resulting block numbers.
     fn get_indirect_block_numbers(
         &self,
         inode: Inode,
@@ -752,6 +813,7 @@ impl<S: YfsStorage> Yfs<S> {
         Ok(Some(indirect_blocks))
     }
 
+    /// Looks for a free block and, if found, marks it as allocated.
     fn assign_free_block(&mut self) -> Option<BlockNumber> {
         let assigned = self.block_bitmap.first_zero();
 
@@ -762,10 +824,12 @@ impl<S: YfsStorage> Yfs<S> {
         assigned
     }
 
+    /// Marks a block as free.
     fn mark_block_as_free(&mut self, block_number: BlockNumber) {
         self.block_bitmap.set(block_number, false);
     }
 
+    /// Looks for a free inode and, if found, marks it as allocated.
     fn assign_free_inode(&mut self) -> Option<InodeNumber> {
         let assigned = self.inode_bitmap.first_zero();
 
@@ -776,6 +840,7 @@ impl<S: YfsStorage> Yfs<S> {
         assigned.map(|inum| inum as InodeNumber)
     }
 
+    /// Marks an inode as free and overwrites it with an inode of type [`InodeType::Free`].
     fn mark_inode_as_free(&mut self, inum: InodeNumber) -> Result<()> {
         self.inode_bitmap.set(inum as usize, false);
 
@@ -797,7 +862,9 @@ impl<S: YfsStorage> Yfs<S> {
         let mut seen_directories = HashSet::<InodeNumber>::new();
         let mut directory_parents = HashMap::from([(ROOT_INODE, ROOT_INODE)]);
 
+        /// The '.' entry, which refers to the current directory.
         const DOT: &CStr = c".";
+        /// The '..' entry, which refers to the parent of the current directory.
         const DOT_DOT: &CStr = c"..";
 
         while let Some(inum) = queue.pop() {

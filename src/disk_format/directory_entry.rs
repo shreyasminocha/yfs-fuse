@@ -9,30 +9,36 @@ use serde::{Deserialize, Serialize};
 
 use super::block::BLOCK_SIZE;
 
+/// The number of bytes occupied by a directory entry.
 pub const DIRECTORY_ENTRY_SIZE: usize = 32;
 const_assert!(size_of::<DirectoryEntry>() == DIRECTORY_ENTRY_SIZE);
 
 const_assert!(BLOCK_SIZE % DIRECTORY_ENTRY_SIZE == 0);
+/// The number of directory entries that fit in a block.
 pub const DIRECTORY_ENTRIES_PER_BLOCK: usize = BLOCK_SIZE / DIRECTORY_ENTRY_SIZE;
 
+/// The maximum supported size of a file or directory name, excluding the nul-terminator.
 pub const MAX_NAME_LEN: usize = 30;
 const_assert!(size_of::<DirectoryEntryName>() == MAX_NAME_LEN);
 
+/// A free directory entry.
 pub const FREE_DIRECTORY_ENTRY: DirectoryEntry = DirectoryEntry {
     inum: 0,
     name: DirectoryEntryName([0; 30]),
 };
 
+/// A directory entry.
 #[derive(Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[repr(C)]
 pub struct DirectoryEntry {
-    /// inode number
+    /// The inode number.
     pub inum: i16,
-    /// file name (not null-terminated)
+    /// The name of the entry.
     pub name: DirectoryEntryName,
 }
 
 impl DirectoryEntry {
+    /// Constructs a new [`DirectoryEntry`] instance.
     pub fn new(inum: i16, name: &CStr) -> Result<DirectoryEntry> {
         Ok(DirectoryEntry {
             inum,
@@ -41,6 +47,9 @@ impl DirectoryEntry {
     }
 }
 
+/// A name, as used in [`DirectoryEntry`].
+///
+/// A maximum of 30-byte-long names are supported.
 #[derive(Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct DirectoryEntryName([u8; 30]);
 

@@ -10,9 +10,11 @@ use crate::yfs::BlockNumber;
 
 use super::yfs_storage::YfsStorage;
 
+/// YFS storage backed by a file on the host operating system.
 pub struct FileBackedStorage(File);
 
 impl FileBackedStorage {
+    /// Constructs a new [`FileBackedStorage`] instance.
     pub fn new(file: File) -> Self {
         FileBackedStorage(file)
     }

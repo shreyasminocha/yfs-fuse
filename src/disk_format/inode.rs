@@ -7,23 +7,31 @@ use crate::yfs::InodeNumber;
 
 use super::{block::BLOCK_SIZE, boot_sector::BOOT_SECTOR_SIZE, header::FS_HEADER_SIZE};
 
+/// The number of bytes occupied by an inode.
 pub const INODE_SIZE: usize = 64;
 const_assert!(size_of::<Inode>() == INODE_SIZE);
 
+/// The number of direct block numbers supported by an inode.
 pub const NUM_DIRECT: usize = 12;
 
 const_assert!(BLOCK_SIZE % 4 == 0);
+/// The number of indirect block numbers supported by an inode.
 pub const NUM_INDIRECT: usize = BLOCK_SIZE / 4;
 
+/// The position in the disk (in bytes) where the first inode begins.
 pub const INODE_START_POSITION: usize = BOOT_SECTOR_SIZE + FS_HEADER_SIZE;
 
 const_assert!(BLOCK_SIZE % INODE_SIZE == 0);
+/// The number of inodes that can fit in a block.
 pub const INODES_PER_BLOCK: usize = BLOCK_SIZE / INODE_SIZE;
 
+/// The maximum supported file size.
 pub const MAX_FILE_SIZE: usize = (NUM_DIRECT + NUM_INDIRECT) * BLOCK_SIZE;
 
+/// The inode number of the root inode.
 pub const ROOT_INODE: InodeNumber = 1;
 
+/// A free inode.
 pub const FREE_INODE: Inode = Inode {
     type_: InodeType::Free,
     nlink: 0,
@@ -33,24 +41,26 @@ pub const FREE_INODE: Inode = Inode {
     indirect: 0,
 };
 
+/// An inode.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[repr(C)]
 pub struct Inode {
-    /// file type (e.g., directory or regular)
+    /// File type (e.g., directory or regular file).
     pub type_: InodeType,
-    /// number of hard links to inode
+    /// Number of hard links to the inode.
     pub nlink: i16,
-    /// inode reuse count
+    /// Number of times the inode has been reused since the filesystem was formatted.
     pub reuse: i32,
-    /// file size in bytes
+    /// File size in bytes.
     pub size: i32,
-    /// block #s for 1st NUM_DIRECT blocks
+    /// The block numbers associated with the first [`NUM_DIRECT`] blocks.
     pub direct: [i32; NUM_DIRECT],
-    /// block number of indirect block
+    /// The block number of the indirect block (or zero, if none).
     pub indirect: i32,
 }
 
 impl Inode {
+    /// Constructs a new [`Inode`] instance with reasonable defaults.
     pub fn new(type_: InodeType, reuse: i32) -> Self {
         Inode {
             type_,
@@ -67,15 +77,16 @@ impl Inode {
     }
 }
 
+/// The type of an inode.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize_repr, Deserialize_repr)]
 #[repr(i16)]
 pub enum InodeType {
-    /// This inode is not in use for any file.
+    /// Not in use for any file.
     Free = 0,
-    /// This inode describes a directory.
+    /// A directory.
     Directory = 1,
-    /// This inode describes a regular data file.
+    /// A regular data file.
     Regular = 2,
-    /// This inode describes a symbolic link.
+    /// A symbolic link.
     Symlink = 3,
 }

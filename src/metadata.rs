@@ -1,8 +1,12 @@
 use std::time::SystemTime;
 
+/// The time metadata associated with files in most filesystems (not including YFS).
 pub struct TimeMetadata {
+    /// Last access time.
     pub atime: SystemTime,
+    /// Last modification time.
     pub mtime: SystemTime,
+    /// Creation time.
     pub crtime: SystemTime,
 }
 
@@ -16,8 +20,11 @@ impl Default for TimeMetadata {
     }
 }
 
+/// The time metadata associated with files in most filesystems (not including YFS).
 #[derive(Default)]
 pub struct OwnershipMetadata {
+    /// Owner user ID.
     pub uid: u32,
+    /// Owner group ID.
     pub gid: u32,
 }

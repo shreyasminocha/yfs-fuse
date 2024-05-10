@@ -3,7 +3,7 @@
 A FUSE adapter for Yalnix File System (YFS) disks from Rice's OS class.
 
 > [!NOTE]
-> The code is currently poorly documented and missing tests.
+> The code currently lacks tests.
 
 ## Features
 
