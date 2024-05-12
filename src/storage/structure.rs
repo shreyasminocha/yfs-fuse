@@ -4,8 +4,9 @@ use anyhow::{bail, ensure, Context, Result};
 
 use crate::disk_format::{
     block::{Block, BlockNumber, BLOCK_SIZE},
+    directory_entry::{DirectoryEntry, DIRECTORY_ENTRY_SIZE},
     header::{FileSystemHeader, FS_HEADER_SIZE},
-    inode::{Inode, INODES_PER_BLOCK, INODE_SIZE},
+    inode::{Inode, InodeType, FREE_INODE, INODES_PER_BLOCK, INODE_SIZE},
 };
 
 use super::yfs_storage::YfsStorage;
@@ -148,6 +149,34 @@ impl<const I: usize, const D: usize> YfsStorage for YfsDisk<I, D> {
         };
 
         Ok(())
+    }
+}
+
+impl<const I: usize, const D: usize> Default for YfsDisk<I, D> {
+    fn default() -> Self {
+        let mut disk = Self::new([0; BLOCK_SIZE], [FREE_INODE; I], [[0; BLOCK_SIZE]; D]);
+
+        let root_inode_data_block = Self::NUM_INODE_BLOCKS as i32 + 1;
+        let mut root_inode = Inode::new(InodeType::Directory, 0);
+        root_inode.direct[0] = root_inode_data_block;
+        root_inode.size = 2 * DIRECTORY_ENTRY_SIZE as i32;
+
+        let entries = [
+            DirectoryEntry::new(1, c".").expect("'.' is a valid name"),
+            DirectoryEntry::new(1, c"..").expect("'..' is a valid name"),
+        ];
+        let mut root_inode_data = [0; BLOCK_SIZE];
+        root_inode_data[0..DIRECTORY_ENTRY_SIZE * 2].copy_from_slice(
+            &entries
+                .map(|entry| bincode::serialize(&entry).unwrap())
+                .concat(),
+        );
+
+        disk.inodes[0] = root_inode;
+        disk.write_block(root_inode_data_block, &root_inode_data)
+            .unwrap();
+
+        disk
     }
 }
 
