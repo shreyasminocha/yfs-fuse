@@ -2,11 +2,10 @@ use std::fs::File;
 use std::os::linux::fs::MetadataExt;
 use std::os::unix::prelude::FileExt;
 
-use anyhow::{Context, Result};
+use anyhow::{ensure, Context, Result};
 
-use crate::disk_format::block::{Block, BLOCK_SIZE};
+use crate::disk_format::block::{Block, BlockNumber, BLOCK_SIZE};
 use crate::fs::{OwnershipMetadata, TimeMetadata};
-use crate::yfs::BlockNumber;
 
 use super::yfs_storage::YfsStorage;
 
@@ -23,23 +22,25 @@ impl FileBackedStorage {
 
 impl YfsStorage for FileBackedStorage {
     fn read_block(&self, block_number: BlockNumber) -> Result<Block> {
+        ensure!(block_number >= 0, "invalid block number: {block_number}");
+
         let mut buf = [0; BLOCK_SIZE];
-        let position = block_number * BLOCK_SIZE;
+        let position = u64::try_from(block_number)? * u64::try_from(BLOCK_SIZE)?;
 
         self.0
-            .read_at(&mut buf, position as u64)
+            .read_at(&mut buf, position)
             .context("reading requested block")?;
 
         Ok(buf)
     }
 
     fn write_block(&self, block_number: BlockNumber, block: &Block) -> Result<()> {
-        let position = block_number * BLOCK_SIZE;
+        ensure!(block_number >= 0, "invalid block number: {block_number}");
+
+        let position = u64::try_from(block_number)? * u64::try_from(BLOCK_SIZE)?;
 
         // todo: deal with short writes
-        self.0
-            .write_at(block, position as u64)
-            .context("writing block")?;
+        self.0.write_at(block, position).context("writing block")?;
 
         Ok(())
     }

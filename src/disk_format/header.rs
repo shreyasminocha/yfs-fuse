@@ -2,7 +2,7 @@ use std::mem::size_of;
 
 use serde::{Deserialize, Serialize};
 
-use super::inode::INODE_SIZE;
+use super::{block::BlockNumber, inode::INODE_SIZE};
 
 /// The number of bytes occupied by the filesystem header.
 pub const FS_HEADER_SIZE: usize = INODE_SIZE;
@@ -10,7 +10,7 @@ const_assert!(size_of::<FileSystemHeader>() == FS_HEADER_SIZE);
 
 /// The block number that includes the filesystem header. The header occupies the first
 /// [`FS_HEADER_SIZE`] bytes of that block.
-pub const FS_HEADER_BLOCK_NUMBER: usize = 1;
+pub const FS_HEADER_BLOCK_NUMBER: BlockNumber = 1;
 
 /// The filesystem header.
 #[derive(Serialize, Deserialize)]

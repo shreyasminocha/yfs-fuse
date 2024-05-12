@@ -16,10 +16,10 @@ use crate::{
     disk_format::{
         block::BLOCK_SIZE,
         directory_entry::{DirectoryEntry, MAX_NAME_LEN},
-        inode::InodeType,
+        inode::{InodeNumber, InodeType},
     },
     storage::YfsStorage,
-    yfs::{InodeNumber, Yfs},
+    yfs::Yfs,
 };
 
 /// Wraps [`Yfs`] and exposes functions that can easily be used to implement FUSE operations.
@@ -133,8 +133,7 @@ impl<S: YfsStorage> YfsFs<S> {
 
         // this can't be a `filter_map` because of the potential error in reading the inode
         for entry in entries.into_iter().skip(offset) {
-            let entry_inum = entry.inum as InodeNumber;
-            let entry_inode = self.yfs.read_inode(entry_inum)?;
+            let entry_inode = self.yfs.read_inode(entry.inum)?;
 
             if entry_inode.type_ == InodeType::Free {
                 warn!("directory includes free entry: {inum}");
@@ -272,7 +271,7 @@ impl<S: YfsStorage> Filesystem for YfsFs<S> {
             return;
         };
 
-        if let Ok(Some(attr)) = self.lookup_entry(parent as InodeNumber, &name) {
+        if let Ok(Some(attr)) = self.lookup_entry(parent.try_into().unwrap(), &name) {
             reply.entry(&Self::TTL, &attr, Self::GENERATION);
         } else {
             reply.error(ENOENT);
@@ -280,17 +279,17 @@ impl<S: YfsStorage> Filesystem for YfsFs<S> {
     }
 
     fn open(&mut self, _req: &Request<'_>, ino: u64, flags: i32, reply: ReplyOpen) {
-        let handle = self.open_file(ino as InodeNumber);
+        let handle = self.open_file(ino.try_into().unwrap());
         reply.opened(handle, flags as u32);
     }
 
     fn opendir(&mut self, _req: &Request<'_>, ino: u64, flags: i32, reply: ReplyOpen) {
-        let handle = self.open_directory(ino as InodeNumber);
+        let handle = self.open_directory(ino.try_into().unwrap());
         reply.opened(handle, flags as u32);
     }
 
     fn getattr(&mut self, _req: &Request, ino: u64, reply: ReplyAttr) {
-        if let Ok(Some(attr)) = self.get_attributes(ino as InodeNumber) {
+        if let Ok(Some(attr)) = self.get_attributes(ino.try_into().unwrap()) {
             reply.attr(&Self::TTL, &attr);
         } else {
             reply.error(EINVAL);
@@ -315,7 +314,7 @@ impl<S: YfsStorage> Filesystem for YfsFs<S> {
         _flags: Option<u32>,
         reply: ReplyAttr,
     ) {
-        if let Ok(attr) = self.set_attributes(ino as InodeNumber, size) {
+        if let Ok(attr) = self.set_attributes(ino.try_into().unwrap(), size) {
             reply.attr(&Self::TTL, &attr);
         } else {
             reply.error(ENOENT);
@@ -333,7 +332,7 @@ impl<S: YfsStorage> Filesystem for YfsFs<S> {
         _lock: Option<u64>,
         reply: ReplyData,
     ) {
-        if let Ok(data) = self.read_file(ino as InodeNumber, offset as usize, size as usize) {
+        if let Ok(data) = self.read_file(ino.try_into().unwrap(), offset as usize, size as usize) {
             reply.data(&data);
         } else {
             reply.error(ENOENT);
@@ -348,7 +347,7 @@ impl<S: YfsStorage> Filesystem for YfsFs<S> {
         offset: i64,
         mut reply: ReplyDirectory,
     ) {
-        let Ok(entries) = self.read_directory(ino as InodeNumber, offset as usize) else {
+        let Ok(entries) = self.read_directory(ino.try_into().unwrap(), offset as usize) else {
             reply.error(ENOENT);
             return;
         };
@@ -395,7 +394,7 @@ impl<S: YfsStorage> Filesystem for YfsFs<S> {
         _lock_owner: Option<u64>,
         reply: ReplyWrite,
     ) {
-        if let Ok(write_len) = self.write_file(ino as InodeNumber, offset as usize, data) {
+        if let Ok(write_len) = self.write_file(ino.try_into().unwrap(), offset as usize, data) {
             reply.written(write_len);
         } else {
             reply.error(ENOENT);
@@ -417,7 +416,7 @@ impl<S: YfsStorage> Filesystem for YfsFs<S> {
             return;
         };
 
-        if let Ok(attr) = self.create_file(parent as InodeNumber, &name) {
+        if let Ok(attr) = self.create_file(parent.try_into().unwrap(), &name) {
             reply.created(
                 &Self::TTL,
                 &attr,
@@ -444,7 +443,7 @@ impl<S: YfsStorage> Filesystem for YfsFs<S> {
             return;
         };
 
-        if let Ok(attr) = self.create_directory(parent as InodeNumber, &name) {
+        if let Ok(attr) = self.create_directory(parent.try_into().unwrap(), &name) {
             reply.entry(&Self::TTL, &attr, Self::GENERATION);
         } else {
             reply.error(EINVAL);
@@ -464,8 +463,11 @@ impl<S: YfsStorage> Filesystem for YfsFs<S> {
             return;
         };
 
-        if let Ok(attr) = self.create_hard_link(newparent as InodeNumber, &name, ino as InodeNumber)
-        {
+        if let Ok(attr) = self.create_hard_link(
+            newparent.try_into().unwrap(),
+            &name,
+            ino.try_into().unwrap(),
+        ) {
             reply.entry(&Self::TTL, &attr, Self::GENERATION);
         } else {
             reply.error(EINVAL);
@@ -478,7 +480,10 @@ impl<S: YfsStorage> Filesystem for YfsFs<S> {
             return;
         };
 
-        if self.remove_hard_link(parent as InodeNumber, &name).is_ok() {
+        if self
+            .remove_hard_link(parent.try_into().unwrap(), &name)
+            .is_ok()
+        {
             reply.ok();
         } else {
             reply.error(EINVAL);
@@ -491,7 +496,10 @@ impl<S: YfsStorage> Filesystem for YfsFs<S> {
             return;
         };
 
-        if self.remove_directory(parent as InodeNumber, &name).is_ok() {
+        if self
+            .remove_directory(parent.try_into().unwrap(), &name)
+            .is_ok()
+        {
             reply.ok();
         } else {
             reply.error(EINVAL);
@@ -520,9 +528,9 @@ impl<S: YfsStorage> Filesystem for YfsFs<S> {
 
         if self
             .rename_entry(
-                parent as InodeNumber,
+                parent.try_into().unwrap(),
                 &name,
-                newparent as InodeNumber,
+                newparent.try_into().unwrap(),
                 &target_name,
             )
             .is_ok()
@@ -551,7 +559,7 @@ impl<S: YfsStorage> Filesystem for YfsFs<S> {
             return;
         };
 
-        if let Ok(attr) = self.create_symbolic_link(parent as InodeNumber, &name, &link) {
+        if let Ok(attr) = self.create_symbolic_link(parent.try_into().unwrap(), &name, &link) {
             reply.entry(&Self::TTL, &attr, Self::GENERATION);
         } else {
             reply.error(EINVAL);
@@ -559,7 +567,7 @@ impl<S: YfsStorage> Filesystem for YfsFs<S> {
     }
 
     fn readlink(&mut self, _req: &Request<'_>, ino: u64, reply: ReplyData) {
-        if let Ok(data) = self.read_symbolic_link(ino as InodeNumber) {
+        if let Ok(data) = self.read_symbolic_link(ino.try_into().unwrap()) {
             reply.data(&data);
         } else {
             reply.error(EINVAL);

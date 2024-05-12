@@ -9,3 +9,6 @@ pub const BLOCK_SIZE: usize = SECTOR_SIZE;
 /// A YFS block.
 pub type Block = [u8; BLOCK_SIZE];
 const_assert!(size_of::<Block>() == BLOCK_SIZE);
+
+/// A block number.
+pub type BlockNumber = i32;

@@ -10,28 +10,19 @@ use log::{info, warn};
 
 use crate::{
     disk_format::{
-        block::{Block, BLOCK_SIZE},
+        block::{Block, BlockNumber, BLOCK_SIZE},
         directory_entry::{
             DirectoryEntry, DirectoryEntryName, DIRECTORY_ENTRIES_PER_BLOCK, DIRECTORY_ENTRY_SIZE,
             FREE_DIRECTORY_ENTRY,
         },
         header::{FileSystemHeader, FS_HEADER_BLOCK_NUMBER},
         inode::{
-            Inode, InodeType, FREE_INODE, INODES_PER_BLOCK, INODE_SIZE, INODE_START_POSITION,
-            MAX_FILE_SIZE, NUM_DIRECT, NUM_INDIRECT, ROOT_INODE,
+            Inode, InodeNumber, InodeType, FREE_INODE, INODES_PER_BLOCK, INODE_SIZE,
+            INODE_START_POSITION, MAX_FILE_SIZE, NUM_DIRECT, NUM_INDIRECT, ROOT_INODE,
         },
     },
     storage::YfsStorage,
 };
-
-// inode numbers are represented as `i16`s on the disk, but we use `u16`s for logical accuracy
-/// An inode number.
-pub(crate) type InodeNumber = u16;
-
-// block numbers are represented as `132`s on the disk, but we use `usize`s to avoid littering
-// the code with casts.
-/// A block number.
-pub(crate) type BlockNumber = usize;
 
 /// Implements YFS operations independent.
 pub struct Yfs<S: YfsStorage> {
@@ -40,9 +31,9 @@ pub struct Yfs<S: YfsStorage> {
     pub storage: S,
     /// The number of blocks in the disk, including the boot block, the filesystem header, blocks
     /// occupied by the inode, and data blocks.
-    pub num_blocks: usize,
+    pub num_blocks: i32,
     /// The number of inodes in the disk.
-    pub num_inodes: usize,
+    pub num_inodes: i16,
     /// Tracks the allocation status of blocks.
     ///
     /// A value of `true` or "one" represents "occupied" and vice-versa.
@@ -83,8 +74,11 @@ impl<S: YfsStorage> Yfs<S> {
             bail!("not enough blocks to store inodes");
         }
 
-        yfs.num_blocks = header.num_blocks as usize;
-        yfs.num_inodes = header.num_inodes as usize;
+        yfs.num_blocks = header.num_blocks;
+        yfs.num_inodes = header
+            .num_inodes
+            .try_into()
+            .context("we should be able to refer to all inodes with i16s")?;
 
         info!("{} total blocks", yfs.num_blocks);
         info!("{} total inodes", yfs.num_inodes);
@@ -93,9 +87,10 @@ impl<S: YfsStorage> Yfs<S> {
         let _ = yfs.storage.read_block(0)?;
         let _ = yfs.storage.read_block(yfs.num_blocks - 1)?;
 
-        yfs.block_bitmap.resize(yfs.num_blocks, false);
+        yfs.block_bitmap.resize(yfs.num_blocks.try_into()?, false);
         // inodes are one-indexed. we add one to simplify indexing
-        yfs.inode_bitmap.resize(yfs.num_inodes + 1, false);
+        yfs.inode_bitmap
+            .resize(usize::try_from(yfs.num_inodes)? + 1, false);
 
         // sector/block zero is the boot sector.
         yfs.block_bitmap.set(0, true);
@@ -104,13 +99,13 @@ impl<S: YfsStorage> Yfs<S> {
 
         // the first INODE_SIZE bytes of the first inode block are occupied by the
         // file system header
-        let last_inode_block = (yfs.num_inodes + 1).div_ceil(INODES_PER_BLOCK);
+        let last_inode_block = (usize::try_from(yfs.num_inodes)? + 1).div_ceil(INODES_PER_BLOCK);
         for b in 1..=last_inode_block {
             yfs.block_bitmap.set(b, true);
         }
 
         for inum in 1..=yfs.num_inodes {
-            let inode = yfs.read_inode(inum as u16)?;
+            let inode = yfs.read_inode(inum)?;
 
             if inode.type_ == InodeType::Free {
                 if !yfs.get_inode_allocated_block_numbers(inode)?.is_empty() {
@@ -121,13 +116,15 @@ impl<S: YfsStorage> Yfs<S> {
             }
 
             // this inode is occupied
-            yfs.inode_bitmap.set(inum, true);
+            yfs.inode_bitmap.set(inum.try_into()?, true);
 
             let block_numbers = yfs.get_inode_allocated_block_numbers(inode)?;
             for block_number in block_numbers {
                 if block_number >= yfs.num_blocks {
                     bail!("invalid block number: {block_number}");
                 }
+
+                let block_number: usize = block_number.try_into()?;
 
                 if block_number <= last_inode_block {
                     bail!("block is used by inodes");
@@ -141,9 +138,9 @@ impl<S: YfsStorage> Yfs<S> {
             }
 
             if inode.indirect != 0 {
-                let indirect_block_number = inode.indirect as BlockNumber;
+                let indirect_block_number: usize = inode.indirect.try_into()?;
 
-                if inode.indirect < 0 || indirect_block_number >= yfs.num_blocks {
+                if inode.indirect < 0 || indirect_block_number >= yfs.num_blocks.try_into()? {
                     bail!("invalid block number: {}", inode.indirect);
                 }
 
@@ -176,7 +173,7 @@ impl<S: YfsStorage> Yfs<S> {
     ) -> Result<Option<InodeNumber>> {
         Ok(self
             .lookup_directory_entry(parent_inum, name)?
-            .map(|(_, entry)| entry.inum as InodeNumber))
+            .map(|(_, entry)| entry.inum))
     }
 
     /// Returns the entries within a directory, excluding "free" entries, i.e. entries with the
@@ -282,8 +279,8 @@ impl<S: YfsStorage> Yfs<S> {
         // we write a block's worth of entries so that garbage in the newly-allocated block
         // isn't interpreted as an entry
         let mut entries = [FREE_DIRECTORY_ENTRY; DIRECTORY_ENTRIES_PER_BLOCK];
-        entries[0] = DirectoryEntry::new(new_inum as i16, c".").expect("'.' is a valid name");
-        entries[1] = DirectoryEntry::new(parent_inum as i16, c"..").expect("'..' is a valid name");
+        entries[0] = DirectoryEntry::new(new_inum, c".").expect("'.' is a valid name");
+        entries[1] = DirectoryEntry::new(parent_inum, c"..").expect("'..' is a valid name");
 
         let data = bincode::serialize(&entries)?;
         self.write_file(new_inum, 0, &data)?;
@@ -304,15 +301,13 @@ impl<S: YfsStorage> Yfs<S> {
             .lookup_directory_entry(parent_inum, name)?
             .ok_or(anyhow!("entry does not exist: {name:?}"))?;
 
-        let entry_inum = entry.inum as InodeNumber;
-
-        let entry_inode = self.read_inode(entry_inum)?;
+        let entry_inode = self.read_inode(entry.inum)?;
         ensure!(
             entry_inode.type_ == InodeType::Directory,
             "can rmdir only directories"
         );
 
-        let entry_chlidren = self.read_directory(entry_inum)?;
+        let entry_chlidren = self.read_directory(entry.inum)?;
         let entry_children: Vec<_> = entry_chlidren
             .iter()
             .filter(|child| {
@@ -326,16 +321,16 @@ impl<S: YfsStorage> Yfs<S> {
             "cannot remove non-empty directories"
         );
 
-        ensure!(entry_inum != ROOT_INODE, "cannot rmdir root directory");
+        ensure!(entry.inum != ROOT_INODE, "cannot rmdir root directory");
 
         self.remove_entry_at_offset(parent_inum, entry_offset)?;
 
         // entry's '..' child no longer points to the parent
         self.update_inode(parent_inum, |parent_inode| parent_inode.nlink -= 1)?;
 
-        self.delete_inode(entry_inum)?;
+        self.delete_inode(entry.inum)?;
 
-        Ok(entry_inum)
+        Ok(entry.inum)
     }
 
     /// Creates a hard link to a file within a given directory with a given name.
@@ -357,7 +352,7 @@ impl<S: YfsStorage> Yfs<S> {
             "can create hard links to regular files and symlinks only"
         );
 
-        let new_entry = DirectoryEntry::new(inum as i16, name)?;
+        let new_entry = DirectoryEntry::new(inum, name)?;
         self.add_directory_entry(parent_inum, &new_entry)?;
 
         inode.nlink += 1;
@@ -381,8 +376,7 @@ impl<S: YfsStorage> Yfs<S> {
             .lookup_directory_entry(parent_inum, name)?
             .ok_or(anyhow!("entry does not exist: {name:?}"))?;
 
-        let entry_inum = entry.inum as InodeNumber;
-        let mut entry_inode = self.read_inode(entry_inum)?;
+        let mut entry_inode = self.read_inode(entry.inum)?;
 
         ensure!(
             [InodeType::Regular, InodeType::Symlink].contains(&entry_inode.type_),
@@ -392,13 +386,13 @@ impl<S: YfsStorage> Yfs<S> {
         self.remove_entry_at_offset(parent_inum, entry_offset)?;
 
         entry_inode.nlink -= 1;
-        self.write_inode(entry_inum, entry_inode)?;
+        self.write_inode(entry.inum, entry_inode)?;
 
         if entry_inode.nlink == 0 {
-            self.delete_inode(entry_inum)?;
+            self.delete_inode(entry.inum)?;
         }
 
-        Ok(entry_inum)
+        Ok(entry.inum)
     }
 
     /// Renames and/or moves a file or directory from a source parent-name pair to a target parent-
@@ -423,8 +417,7 @@ impl<S: YfsStorage> Yfs<S> {
         if let Some((target_entry_offset, existing_target_entry)) =
             self.lookup_directory_entry(target_parent_inum, target_name)?
         {
-            let existing_target_inode =
-                self.read_inode(existing_target_entry.inum as InodeNumber)?;
+            let existing_target_inode = self.read_inode(existing_target_entry.inum)?;
             ensure!(
                 existing_target_inode.type_ != InodeType::Directory,
                 "rename target name cannot refer to a directory"
@@ -486,15 +479,15 @@ impl<S: YfsStorage> Yfs<S> {
 
     /// Reads the inode at a given inode number.
     pub fn read_inode(&self, inum: InodeNumber) -> Result<Inode> {
-        if inum == 0 {
+        if inum <= 0 || inum > self.num_inodes {
             bail!("invalid inode number: {inum}");
         }
 
-        let position = INODE_START_POSITION + ((inum - 1) as usize * INODE_SIZE);
+        let position = INODE_START_POSITION + (usize::try_from(inum - 1)? * INODE_SIZE);
         let block_number = position / BLOCK_SIZE;
         let offset = position % BLOCK_SIZE;
 
-        let block = self.storage.read_block(block_number)?;
+        let block = self.storage.read_block(block_number.try_into()?)?;
         let inode = &block[offset..offset + INODE_SIZE];
 
         bincode::deserialize(inode).context("parsing inode")
@@ -502,7 +495,7 @@ impl<S: YfsStorage> Yfs<S> {
 
     /// Writes to the inode at a given inode number.
     pub fn write_inode(&self, inum: InodeNumber, inode: Inode) -> Result<()> {
-        if inum == 0 {
+        if inum <= 0 || inum > self.num_inodes {
             bail!("invalid inode number: {inum}");
         }
 
@@ -512,10 +505,10 @@ impl<S: YfsStorage> Yfs<S> {
         let block_number = position / BLOCK_SIZE;
         let offset = position % BLOCK_SIZE;
 
-        let mut block = self.storage.read_block(block_number)?;
+        let mut block = self.storage.read_block(block_number.try_into()?)?;
         block[offset..offset + INODE_SIZE].copy_from_slice(&inode_serialized);
 
-        self.storage.write_block(block_number, &block)?;
+        self.storage.write_block(block_number.try_into()?, &block)?;
 
         Ok(())
     }
@@ -727,8 +720,7 @@ impl<S: YfsStorage> Yfs<S> {
                 .collect::<Vec<_>>()
                 .try_into()
                 .expect("NUM_INDIRECT = BLOCK_SIZE / 4. So, NUM_INDIRECT * 4 == BLOCK_SIZE");
-            self.storage
-                .write_block(inode.indirect as BlockNumber, &indirect_block)?;
+            self.storage.write_block(inode.indirect, &indirect_block)?;
         }
 
         // update the inode with the new direct/indirect blocks
@@ -772,7 +764,6 @@ impl<S: YfsStorage> Yfs<S> {
             .direct
             .into_iter()
             .take_while(|b| *b != 0)
-            .map(|b| b as usize)
             .collect::<Vec<_>>();
 
         let indirect_blocks = self
@@ -795,20 +786,15 @@ impl<S: YfsStorage> Yfs<S> {
         &self,
         inode: Inode,
     ) -> Result<Option<[BlockNumber; NUM_INDIRECT]>> {
-        let indirect_block_number: BlockNumber = inode
-            .indirect
-            .try_into()
-            .context("converting block number to BlockNumber")?;
-
-        if indirect_block_number == 0 {
+        if inode.indirect == 0 {
             return Ok(None);
         }
 
         let indirect_blocks = self
             .storage
-            .read_block(indirect_block_number)?
+            .read_block(inode.indirect)?
             .array_chunks::<4>()
-            .map(|b| u32::from_le_bytes(*b) as BlockNumber)
+            .map(|b| BlockNumber::from_le_bytes(*b))
             .collect::<Vec<_>>()
             .try_into()
             .expect("NUM_DIRECT is defined as BLOCK_SIZE divided by 4");
@@ -824,12 +810,13 @@ impl<S: YfsStorage> Yfs<S> {
             self.block_bitmap.set(block, true);
         }
 
-        assigned
+        assigned.map(|n| n.try_into().unwrap())
     }
 
     /// Marks a block as free.
     fn mark_block_as_free(&mut self, block_number: BlockNumber) {
-        self.block_bitmap.set(block_number, false);
+        self.block_bitmap
+            .set(block_number.try_into().unwrap(), false);
     }
 
     /// Looks for a free inode and, if found, marks it as allocated.
@@ -840,7 +827,7 @@ impl<S: YfsStorage> Yfs<S> {
             self.inode_bitmap.set(inode, true);
         }
 
-        assigned.map(|inum| inum as InodeNumber)
+        assigned.map(|inum| inum.try_into().unwrap())
     }
 
     /// Marks an inode as free and overwrites it with an inode of type [`InodeType::Free`].
@@ -880,7 +867,7 @@ impl<S: YfsStorage> Yfs<S> {
                 bail!("invalid size in inode: {}", inode.size);
             }
 
-            if inode.size as usize > MAX_FILE_SIZE {
+            if inode.size > MAX_FILE_SIZE {
                 bail!("size in inode is greater than the maximum valid file size");
             }
 
@@ -914,7 +901,7 @@ impl<S: YfsStorage> Yfs<S> {
                 let mut entry_names: HashSet<CString> = HashSet::new();
 
                 for entry in self.read_directory_entries(inum)? {
-                    if entry.inum < 0 || entry.inum as usize > self.num_inodes {
+                    if entry.inum < 0 || entry.inum > self.num_inodes {
                         bail!("invalid inode number in directory entry: {}", entry.inum);
                     }
 
@@ -958,7 +945,7 @@ impl<S: YfsStorage> Yfs<S> {
                         directory_parents.insert(entry_inum, inum);
                     }
 
-                    queue.push(entry.inum as InodeNumber);
+                    queue.push(entry.inum);
                 }
 
                 if !entry_names.contains(DOT) {

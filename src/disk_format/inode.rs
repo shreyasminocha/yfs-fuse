@@ -3,8 +3,6 @@ use std::mem::size_of;
 use serde::{Deserialize, Serialize};
 use serde_repr::{Deserialize_repr, Serialize_repr};
 
-use crate::yfs::InodeNumber;
-
 use super::{block::BLOCK_SIZE, boot_sector::BOOT_SECTOR_SIZE, header::FS_HEADER_SIZE};
 
 /// The number of bytes occupied by an inode.
@@ -26,7 +24,7 @@ const_assert!(BLOCK_SIZE % INODE_SIZE == 0);
 pub const INODES_PER_BLOCK: usize = BLOCK_SIZE / INODE_SIZE;
 
 /// The maximum supported file size.
-pub const MAX_FILE_SIZE: usize = (NUM_DIRECT + NUM_INDIRECT) * BLOCK_SIZE;
+pub const MAX_FILE_SIZE: i32 = ((NUM_DIRECT + NUM_INDIRECT) * BLOCK_SIZE) as i32;
 
 /// The inode number of the root inode.
 pub const ROOT_INODE: InodeNumber = 1;
@@ -90,3 +88,6 @@ pub enum InodeType {
     /// A symbolic link.
     Symlink = 3,
 }
+
+/// An inode number.
+pub type InodeNumber = i16;

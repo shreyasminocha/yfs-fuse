@@ -1,8 +1,7 @@
 use anyhow::Result;
 
-use crate::disk_format::block::Block;
+use crate::disk_format::block::{Block, BlockNumber};
 use crate::fs::{OwnershipMetadata, TimeMetadata};
-use crate::yfs::BlockNumber;
 
 /// An abstraction that allows reading and writing YFS-style blocks.
 pub trait YfsStorage {

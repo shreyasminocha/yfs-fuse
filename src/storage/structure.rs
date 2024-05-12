@@ -1,12 +1,9 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, ensure, Context, Result};
 
-use crate::{
-    disk_format::{
-        block::{Block, BLOCK_SIZE},
-        header::FileSystemHeader,
-        inode::{Inode, INODES_PER_BLOCK},
-    },
-    yfs::BlockNumber,
+use crate::disk_format::{
+    block::{Block, BlockNumber, BLOCK_SIZE},
+    header::FileSystemHeader,
+    inode::{Inode, INODES_PER_BLOCK},
 };
 
 use super::yfs_storage::YfsStorage;
@@ -49,7 +46,9 @@ impl<const I: usize, const D: usize> YfsDisk<I, D> {
 
 impl<const I: usize, const D: usize> YfsStorage for YfsDisk<I, D> {
     fn read_block(&self, block_number: BlockNumber) -> Result<Block> {
-        let block = match block_number {
+        ensure!(block_number >= 0, "invalid block number: {block_number}");
+
+        let block = match usize::try_from(block_number)? {
             0 => self.boot_sector,
             1 => {
                 let header_serialized = bincode::serialize(&self.file_system_header)?;
