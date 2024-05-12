@@ -4,7 +4,7 @@ use std::{
     mem::size_of,
 };
 
-use anyhow::{bail, Result};
+use anyhow::{ensure, Result};
 use serde::{Deserialize, Serialize};
 
 use super::block::BLOCK_SIZE;
@@ -58,9 +58,10 @@ impl TryFrom<&CStr> for DirectoryEntryName {
     type Error = anyhow::Error;
 
     fn try_from(value: &CStr) -> Result<Self, Self::Error> {
-        if value.count_bytes() > 30 {
-            bail!("string is more than 30 characters long")
-        }
+        ensure!(
+            value.count_bytes() <= 30,
+            "string is more than 30 characters long"
+        );
 
         let bytes = value.to_bytes();
         let mut converted = [0; 30];
