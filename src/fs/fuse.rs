@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, ensure, Result};
 use fuser::{
-    FileAttr, FileType, Filesystem, ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory, ReplyEmpty,
+    FileAttr, Filesystem, ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory, ReplyEmpty,
     ReplyEntry, ReplyOpen, ReplyStatfs, ReplyWrite, Request,
 };
 use libc::{EINVAL, ENOENT};
@@ -61,17 +61,12 @@ impl<S: YfsStorage> YfsFs<S> {
         Ok(Some(FileAttr {
             ino: inum as u64,
             size: inode.size as u64,
-            blocks: inode.size.div_ceil(BLOCK_SIZE as i32) as u64,
+            blocks: inode.size_in_blocks() as u64,
             atime: time_metadata.atime,
             mtime: time_metadata.mtime,
             ctime: time_metadata.mtime,
             crtime: time_metadata.crtime,
-            kind: match inode.type_ {
-                InodeType::Directory => FileType::Directory,
-                InodeType::Regular => FileType::RegularFile,
-                InodeType::Symlink => FileType::Symlink,
-                InodeType::Free => unreachable!("we handle this case above"),
-            },
+            kind: inode.type_.into(),
             perm: 0o755,
             nlink: inode.nlink as u32,
             uid: ownership_metadata.uid,
@@ -356,19 +351,10 @@ impl<S: YfsStorage> Filesystem for YfsFs<S> {
             .into_iter()
             .enumerate()
             .try_for_each(|(i, (entry, inode_type))| {
-                let file_type = match inode_type {
-                    InodeType::Directory => FileType::Directory,
-                    InodeType::Regular => FileType::RegularFile,
-                    InodeType::Symlink => FileType::Symlink,
-                    InodeType::Free => {
-                        unreachable!("we filtered these in `self.read_directory`")
-                    }
-                };
-
                 let is_buffer_full = reply.add(
                     entry.inum as u64,
                     (i + 1) as i64,
-                    file_type,
+                    inode_type.into(),
                     entry.name.to_string(),
                 );
 

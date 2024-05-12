@@ -871,9 +871,7 @@ impl<S: YfsStorage> Yfs<S> {
                 bail!("size in inode is greater than the maximum valid file size");
             }
 
-            if self.get_inode_allocated_block_numbers(inode)?.len()
-                < (inode.size as usize).div_ceil(BLOCK_SIZE)
-            {
+            if self.get_inode_allocated_block_numbers(inode)?.len() < inode.size_in_blocks() {
                 bail!(
                     "inode doesn't have enough blocks to store {} bytes",
                     inode.size

@@ -1,5 +1,6 @@
 use std::mem::size_of;
 
+use fuser::FileType;
 use serde::{Deserialize, Serialize};
 use serde_repr::{Deserialize_repr, Serialize_repr};
 
@@ -73,6 +74,11 @@ impl Inode {
             indirect: 0,
         }
     }
+
+    /// Returns the minimum number of blocks needed to store the file represented by the inode.
+    pub fn size_in_blocks(&self) -> usize {
+        self.size.div_ceil(BLOCK_SIZE as i32).try_into().unwrap()
+    }
 }
 
 /// The type of an inode.
@@ -87,6 +93,17 @@ pub enum InodeType {
     Regular = 2,
     /// A symbolic link.
     Symlink = 3,
+}
+
+impl From<InodeType> for FileType {
+    fn from(val: InodeType) -> Self {
+        match val {
+            InodeType::Directory => FileType::Directory,
+            InodeType::Regular => FileType::RegularFile,
+            InodeType::Symlink => FileType::Symlink,
+            InodeType::Free => panic!("free inodes should be handled separately"),
+        }
+    }
 }
 
 /// An inode number.
