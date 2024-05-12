@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use clap::Parser;
 
+use fuser::MountOption;
 use yfs::fs::YfsFs;
 use yfs::storage::FileBackedStorage;
 use yfs::yfs::Yfs;
@@ -31,7 +32,11 @@ fn main() -> Result<()> {
     let yfs = Yfs::new(FileBackedStorage::new(disk_file))?;
 
     let mountpoint = args.mountpoint;
-    fuser::mount2(YfsFs::new(yfs)?, mountpoint, &[]).unwrap();
+    fuser::mount2(
+        YfsFs::new(yfs)?,
+        mountpoint,
+        &[MountOption::AllowRoot, MountOption::AutoUnmount],
+    )?;
 
     Ok(())
 }
