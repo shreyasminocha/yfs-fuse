@@ -494,7 +494,7 @@ impl<S: YfsStorage> Yfs<S> {
     }
 
     /// Writes to the inode at a given inode number.
-    pub fn write_inode(&self, inum: InodeNumber, inode: Inode) -> Result<()> {
+    pub fn write_inode(&mut self, inum: InodeNumber, inode: Inode) -> Result<()> {
         if inum <= 0 || inum > self.num_inodes {
             bail!("invalid inode number: {inum}");
         }
@@ -515,7 +515,7 @@ impl<S: YfsStorage> Yfs<S> {
 
     /// Updates the inode at a given inode number with the changes made by the `update_inode`
     /// function.
-    pub fn update_inode<F>(&self, inum: InodeNumber, mut update_inode: F) -> Result<()>
+    pub fn update_inode<F>(&mut self, inum: InodeNumber, mut update_inode: F) -> Result<()>
     where
         F: FnMut(&mut Inode),
     {
@@ -736,7 +736,7 @@ impl<S: YfsStorage> Yfs<S> {
     }
 
     /// Writes to the block at the requested index within a given file.
-    fn write_file_block(&self, inode: Inode, n: usize, block: &Block) -> Result<()> {
+    fn write_file_block(&mut self, inode: Inode, n: usize, block: &Block) -> Result<()> {
         let block_number = self.get_file_block_number(inode, n)?;
         self.storage.write_block(block_number, block)
     }

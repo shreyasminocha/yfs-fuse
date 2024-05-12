@@ -9,7 +9,7 @@ pub trait YfsStorage {
     fn read_block(&self, block_number: BlockNumber) -> Result<Block>;
 
     /// Writes to the block at the given block number.
-    fn write_block(&self, block_number: BlockNumber, block: &Block) -> Result<()>;
+    fn write_block(&mut self, block_number: BlockNumber, block: &Block) -> Result<()>;
 
     /// Returns time metadata associated with the storage medium.
     fn time_metadata(&self) -> Result<TimeMetadata> {

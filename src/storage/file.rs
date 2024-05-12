@@ -34,7 +34,7 @@ impl YfsStorage for FileBackedStorage {
         Ok(buf)
     }
 
-    fn write_block(&self, block_number: BlockNumber, block: &Block) -> Result<()> {
+    fn write_block(&mut self, block_number: BlockNumber, block: &Block) -> Result<()> {
         ensure!(block_number >= 0, "invalid block number: {block_number}");
 
         let position = u64::try_from(block_number)? * u64::try_from(BLOCK_SIZE)?;
