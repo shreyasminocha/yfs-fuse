@@ -1093,6 +1093,14 @@ mod tests {
         }
 
         #[test]
+        fn test_entry_already_exists() {
+            let mut yfs = Yfs::new(YfsDisk::empty(1, 10).unwrap()).unwrap();
+            let _ = yfs.create(ROOT_INODE, c"foo", InodeType::Regular);
+
+            assert!(yfs.create(ROOT_INODE, c"foo", InodeType::Regular).is_err());
+        }
+
+        #[test]
         fn test_root_child() {
             let mut yfs = Yfs::new(YfsDisk::empty(10, 10).unwrap()).unwrap();
             let inum = yfs.create(ROOT_INODE, c"foo", InodeType::Regular).unwrap();
@@ -1322,26 +1330,86 @@ mod tests {
     }
 
     mod remove_directory {
-        #[test]
-        fn test_parent_inode_type() {}
+        use super::*;
 
         #[test]
-        fn test_entry_inode_type() {}
+        fn test_file_parent() {
+            let mut yfs = Yfs::new(YfsDisk::empty(10, 10).unwrap()).unwrap();
+            let inum = yfs.create_file(ROOT_INODE, c"foo").unwrap();
+
+            assert!(yfs.remove_directory(inum, c"bar").is_err());
+        }
 
         #[test]
-        fn test_missing_entry() {}
+        fn test_file_entry() {
+            let mut yfs = Yfs::new(YfsDisk::empty(10, 10).unwrap()).unwrap();
+            let _ = yfs.create_file(ROOT_INODE, c"foo");
+
+            assert!(yfs.remove_directory(ROOT_INODE, c"foo").is_err());
+        }
 
         #[test]
-        fn test_rmdir_non_empty_directory() {}
+        fn test_missing_entry() {
+            let mut yfs = Yfs::new(YfsDisk::empty(10, 10).unwrap()).unwrap();
+            let _ = yfs.create_directory(ROOT_INODE, c"foo");
+
+            assert!(yfs.remove_directory(ROOT_INODE, c"bar").is_err());
+        }
 
         #[test]
-        fn test_rmdir_root_directory() {}
+        fn test_rmdir_non_empty_directory() {
+            let mut yfs = Yfs::new(YfsDisk::empty(10, 10).unwrap()).unwrap();
+            let inum = yfs.create_directory(ROOT_INODE, c"foo").unwrap();
+
+            let _ = yfs.create_file(inum, c"a").unwrap();
+            let _ = yfs.create_file(inum, c"b").unwrap();
+            let _ = yfs.create_file(inum, c"c").unwrap();
+
+            assert!(yfs.remove_directory(ROOT_INODE, c"foo").is_err());
+        }
 
         #[test]
-        fn test_rmdir_empty_directory() {}
+        fn test_rmdir_root_directory() {
+            let mut yfs = Yfs::new(YfsDisk::empty(10, 10).unwrap()).unwrap();
+
+            assert!(yfs.remove_directory(ROOT_INODE, c".").is_err());
+        }
 
         #[test]
-        fn test_parent_directory_nlink() {}
+        fn test_rmdir_empty_directory() {
+            let mut yfs = Yfs::new(YfsDisk::empty(10, 10).unwrap()).unwrap();
+            let inum = yfs.create_directory(ROOT_INODE, c"foo").unwrap();
+
+            yfs.remove_directory(ROOT_INODE, c"foo").unwrap();
+
+            let root_entries = yfs.read_directory(ROOT_INODE).unwrap();
+            assert!(root_entries.iter().all(|entry| entry.inum != inum));
+        }
+
+        #[test]
+        fn test_rmdir_nested_directory() {
+            let mut yfs = Yfs::new(YfsDisk::empty(10, 10).unwrap()).unwrap();
+            let parent_inum = yfs.create_directory(ROOT_INODE, c"foo").unwrap();
+            let parent_inum = yfs.create_directory(parent_inum, c"bar").unwrap();
+            let inum = yfs.create_directory(parent_inum, c"baz").unwrap();
+
+            yfs.remove_directory(parent_inum, c"baz").unwrap();
+
+            let root_entries = yfs.read_directory(parent_inum).unwrap();
+            assert!(root_entries.iter().all(|entry| entry.inum != inum));
+        }
+
+        #[test]
+        fn test_parent_directory_nlink() {
+            let mut yfs = Yfs::new(YfsDisk::empty(10, 10).unwrap()).unwrap();
+            let _ = yfs.create_directory(ROOT_INODE, c"foo").unwrap();
+
+            let old_nlink = yfs.read_inode(ROOT_INODE).unwrap().nlink;
+            yfs.remove_directory(ROOT_INODE, c"foo").unwrap();
+            let new_nlink = yfs.read_inode(ROOT_INODE).unwrap().nlink;
+
+            assert_eq!(new_nlink, old_nlink - 1);
+        }
     }
 
     mod create_hard_link {
