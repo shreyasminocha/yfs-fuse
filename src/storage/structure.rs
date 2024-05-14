@@ -540,6 +540,24 @@ mod tests {
                 ]
             );
         }
+
+        #[test]
+        fn test_root_directory_reuse() {
+            let yfs_disk = YfsDisk::empty(10, 10).unwrap();
+            let yfs = Yfs::new(yfs_disk).unwrap();
+            let root_inode = yfs.read_inode(ROOT_INODE).unwrap();
+
+            assert_eq!(root_inode.reuse, 0);
+        }
+
+        #[test]
+        fn test_root_directory_nlink() {
+            let yfs_disk = YfsDisk::empty(10, 10).unwrap();
+            let yfs = Yfs::new(yfs_disk).unwrap();
+            let root_inode = yfs.read_inode(ROOT_INODE).unwrap();
+
+            assert_eq!(root_inode.nlink, 2);
+        }
     }
 
     const EMPTY_BLOCK: Block = [0; BLOCK_SIZE];

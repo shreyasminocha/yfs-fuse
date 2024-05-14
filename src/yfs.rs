@@ -17,8 +17,8 @@ use crate::{
         },
         header::{FileSystemHeader, FS_HEADER_BLOCK_NUMBER},
         inode::{
-            Inode, InodeNumber, InodeType, FREE_INODE, INODES_PER_BLOCK, INODE_SIZE,
-            INODE_START_POSITION, MAX_FILE_SIZE, NUM_DIRECT, NUM_INDIRECT, ROOT_INODE,
+            Inode, InodeNumber, InodeType, INODES_PER_BLOCK, INODE_SIZE, INODE_START_POSITION,
+            MAX_FILE_SIZE, NUM_DIRECT, NUM_INDIRECT, ROOT_INODE,
         },
     },
     storage::YfsStorage,
@@ -238,6 +238,11 @@ impl<S: YfsStorage> Yfs<S> {
         let mut position = offset;
         let end = offset + data.len();
 
+        ensure!(
+            end <= MAX_FILE_SIZE as usize,
+            "requested write ends past the maximum supported file size"
+        );
+
         self.grow_file(inum, end)?; // grows file only if necessary
 
         // we're careful to read the inode *after* potentially growing the file
@@ -315,8 +320,8 @@ impl<S: YfsStorage> Yfs<S> {
             "can rmdir only directories"
         );
 
-        let entry_chlidren = self.read_directory(entry.inum)?;
-        let entry_children: Vec<_> = entry_chlidren
+        let entry_children = self.read_directory(entry.inum)?;
+        let entry_children: Vec<_> = entry_children
             .iter()
             .filter(|child| {
                 let name = CString::from(&child.name);
@@ -553,8 +558,8 @@ impl<S: YfsStorage> Yfs<S> {
             .ok_or(anyhow!("no more free inodes"))? as InodeNumber;
         let new_entry = DirectoryEntry::new(new_inum as i16, name)?;
 
-        let old_reuse = self.read_inode(new_inum)?.reuse;
-        let new_inode = Inode::new(inode_type, old_reuse + 1);
+        let reuse = self.read_inode(new_inum)?.reuse;
+        let new_inode = Inode::new(inode_type, reuse);
         self.write_inode(new_inum, new_inode)?;
 
         self.add_directory_entry(parent_inum, &new_entry)?;
@@ -650,7 +655,7 @@ impl<S: YfsStorage> Yfs<S> {
         self.add_entry_at_offset(inum, entry_offset, &FREE_DIRECTORY_ENTRY)
     }
 
-    /// Frees any allocated blocks and writes a free inode in place of the original inode.
+    /// Frees any allocated blocks and marks the inode as free. Increments the inode's reuse count.
     fn delete_inode(&mut self, inum: InodeNumber) -> Result<()> {
         let inode = self.read_inode(inum)?;
         let allocated_blocks = self.get_inode_allocated_block_numbers(inode)?;
@@ -759,9 +764,9 @@ impl<S: YfsStorage> Yfs<S> {
 
         let block_numbers = self.get_inode_allocated_block_numbers(inode)?;
 
-        Ok(*block_numbers
-            .get(n)
-            .ok_or(anyhow!("block index exceeds allocated block count"))?)
+        Ok(*block_numbers.get(n).ok_or(anyhow!(
+            "block index is not less than allocated block count"
+        ))?)
     }
 
     /// Gets the block numbers of the blocks allocated for a given file.
@@ -841,10 +846,14 @@ impl<S: YfsStorage> Yfs<S> {
     }
 
     /// Marks an inode as free and overwrites it with an inode of type [`InodeType::Free`].
+    /// Increments the inode's reuse count.
     fn mark_inode_as_free(&mut self, inum: InodeNumber) -> Result<()> {
         self.inode_bitmap.set(inum as usize, false);
 
-        self.write_inode(inum, FREE_INODE)
+        let old_reuse = self.read_inode(inum)?.reuse;
+        let new_inode = Inode::new(InodeType::Free, old_reuse + 1);
+
+        self.write_inode(inum, new_inode)
     }
 
     /// Checks the filesystem for consistency. Performs a depth-first traversal of the directory
@@ -970,6 +979,11 @@ impl<S: YfsStorage> Yfs<S> {
 
 #[cfg(test)]
 mod tests {
+    use crate::disk_format::directory_entry::MAX_NAME_LEN;
+    use crate::storage::YfsDisk;
+
+    use super::*;
+
     mod validation {
         #[test]
         fn test_invalid_num_inodes() {}
@@ -1039,57 +1053,272 @@ mod tests {
     }
 
     mod create {
-        #[test]
-        fn test_invalid_parent_inum() {}
+        use super::*;
 
         #[test]
-        fn test_non_directory_parent() {}
+        fn test_invalid_parent_inum() {
+            let mut yfs = Yfs::new(YfsDisk::empty(10, 10).unwrap()).unwrap();
+            assert!(yfs.create(2, c"foo", InodeType::Regular).is_err());
+        }
 
         #[test]
-        fn test_no_more_inodes() {}
+        fn test_non_directory_parent() {
+            let mut yfs = Yfs::new(YfsDisk::empty(10, 10).unwrap()).unwrap();
+            let parent_inum = yfs.create_file(ROOT_INODE, c"foo").unwrap();
+
+            assert!(yfs.create(parent_inum, c"bar", InodeType::Regular).is_err());
+        }
 
         #[test]
-        fn test_root_child() {}
+        fn test_name_length_at_limit() {
+            let mut yfs = Yfs::new(YfsDisk::empty(10, 10).unwrap()).unwrap();
+            let name = CString::new("a".repeat(MAX_NAME_LEN)).unwrap();
+
+            assert!(yfs.create(ROOT_INODE, &name, InodeType::Regular).is_ok());
+        }
 
         #[test]
-        fn test_nested_child() {}
+        fn test_name_too_long() {
+            let mut yfs = Yfs::new(YfsDisk::empty(10, 10).unwrap()).unwrap();
+            let name = CString::new("a".repeat(MAX_NAME_LEN + 1)).unwrap();
+
+            assert!(yfs.create(ROOT_INODE, &name, InodeType::Regular).is_err());
+        }
 
         #[test]
-        fn test_parent_free_entry() {}
+        fn test_no_more_inodes() {
+            let mut yfs = Yfs::new(YfsDisk::empty(1, 10).unwrap()).unwrap();
+
+            assert!(yfs.create(ROOT_INODE, c"foo", InodeType::Regular).is_err());
+        }
 
         #[test]
-        fn test_parent_no_free_entry() {}
+        fn test_root_child() {
+            let mut yfs = Yfs::new(YfsDisk::empty(10, 10).unwrap()).unwrap();
+            let inum = yfs.create(ROOT_INODE, c"foo", InodeType::Regular).unwrap();
+            let root_entries = yfs.read_directory(ROOT_INODE).unwrap();
+
+            assert!(root_entries.iter().any(|entry| entry.inum == inum));
+        }
 
         #[test]
-        fn test_parent_no_free_entry_block_boundary() {}
+        fn test_nested_child() {
+            let mut yfs = Yfs::new(YfsDisk::empty(10, 10).unwrap()).unwrap();
+            let parent_inum = yfs.create_directory(ROOT_INODE, c"a").unwrap();
+            let parent_inum = yfs.create_directory(parent_inum, c"a").unwrap();
+            let parent_inum = yfs.create_directory(parent_inum, c"a").unwrap();
+            let parent_inum = yfs.create_directory(parent_inum, c"a").unwrap();
+            let parent_inum = yfs.create_directory(parent_inum, c"a").unwrap();
+
+            // /a/a/a/a/a/foo
+            let inum = yfs.create(parent_inum, c"foo", InodeType::Regular).unwrap();
+            let parent_entries = yfs.read_directory(parent_inum).unwrap();
+            assert!(parent_entries.iter().any(|entry| entry.inum == inum));
+        }
+
+        #[test]
+        fn test_reuse_free_entry() {
+            let mut yfs = Yfs::new(YfsDisk::empty(20, 10).unwrap()).unwrap();
+            let existing_entries = yfs.read_directory(ROOT_INODE).unwrap();
+
+            for i in 0..(DIRECTORY_ENTRIES_PER_BLOCK - existing_entries.len()) {
+                let name = CString::new(i.to_string()).unwrap();
+                let _ = yfs.create_file(ROOT_INODE, &name).unwrap();
+            }
+
+            let root_inode = yfs.read_inode(ROOT_INODE).unwrap();
+            let root_inode_allocated_blocks =
+                yfs.get_inode_allocated_block_numbers(root_inode).unwrap();
+            assert_eq!(root_inode_allocated_blocks.len(), 1);
+
+            let (entry_offset, _) = yfs
+                .lookup_directory_entry(ROOT_INODE, c"4")
+                .unwrap()
+                .unwrap();
+            yfs.remove_hard_link(ROOT_INODE, c"4").unwrap();
+
+            let _ = yfs.create(ROOT_INODE, c"foo", InodeType::Regular).unwrap();
+
+            assert_eq!(
+                yfs.lookup_directory_entry(ROOT_INODE, c"foo")
+                    .unwrap()
+                    .unwrap()
+                    .0,
+                entry_offset
+            );
+        }
+
+        #[test]
+        fn test_grow_when_no_free_entry() {
+            let mut yfs = Yfs::new(YfsDisk::empty(10, 10).unwrap()).unwrap();
+            yfs.update_inode(ROOT_INODE, |inode| {
+                inode.size = 2 * DIRECTORY_ENTRY_SIZE as i32
+            })
+            .unwrap();
+
+            let inum = yfs.create(ROOT_INODE, c"foo", InodeType::Regular).unwrap();
+            let root_entries = yfs.read_directory(ROOT_INODE).unwrap();
+            assert!(root_entries.iter().any(|entry| entry.inum == inum));
+
+            let root_inode = yfs.read_inode(ROOT_INODE).unwrap();
+            assert!(root_inode.size > 2 * DIRECTORY_ENTRY_SIZE as i32);
+        }
+
+        #[test]
+        fn test_parent_no_free_entry_block_boundary() {
+            let mut yfs = Yfs::new(YfsDisk::empty(20, 10).unwrap()).unwrap();
+            let existing_entries = yfs.read_directory(ROOT_INODE).unwrap();
+
+            for i in 0..(DIRECTORY_ENTRIES_PER_BLOCK - existing_entries.len()) {
+                let name = CString::new(i.to_string()).unwrap();
+                let _ = yfs.create_file(ROOT_INODE, &name).unwrap();
+            }
+
+            let root_inode = yfs.read_inode(ROOT_INODE).unwrap();
+            let root_inode_allocated_blocks =
+                yfs.get_inode_allocated_block_numbers(root_inode).unwrap();
+            assert_eq!(root_inode_allocated_blocks.len(), 1);
+
+            let inum = yfs.create(ROOT_INODE, c"foo", InodeType::Regular).unwrap();
+            let entries = yfs.read_directory(ROOT_INODE).unwrap();
+            assert!(entries.iter().any(|entry| entry.inum == inum));
+
+            let root_inode = yfs.read_inode(ROOT_INODE).unwrap();
+            let root_inode_allocated_blocks =
+                yfs.get_inode_allocated_block_numbers(root_inode).unwrap();
+            assert_eq!(root_inode_allocated_blocks.len(), 2);
+        }
+
+        #[test]
+        fn test_parent_at_entry_limit() {
+            let mut yfs = Yfs::new(YfsDisk::empty(2500, 2500).unwrap()).unwrap();
+            let existing_entries = yfs.read_directory(ROOT_INODE).unwrap();
+            let max_entries = (MAX_FILE_SIZE as usize).div_floor(DIRECTORY_ENTRY_SIZE);
+
+            for i in 0..(max_entries - existing_entries.len()) {
+                let name = CString::new(i.to_string()).unwrap();
+                let _ = yfs.create_file(ROOT_INODE, &name).unwrap();
+            }
+
+            assert!(yfs.create(ROOT_INODE, c"foo", InodeType::Regular).is_err());
+        }
+
+        #[test]
+        fn test_inode_reuse_count_fresh() {
+            let mut yfs = Yfs::new(YfsDisk::empty(2, 10).unwrap()).unwrap();
+            let inum = yfs.create(ROOT_INODE, c"foo", InodeType::Regular).unwrap();
+            let inode = yfs.read_inode(inum).unwrap();
+
+            assert_eq!(inode.reuse, 0);
+        }
+
+        #[test]
+        fn test_inode_reuse_count_reused() {
+            let mut yfs = Yfs::new(YfsDisk::empty(2, 10).unwrap()).unwrap();
+            let inum = yfs.create(ROOT_INODE, c"foo", InodeType::Regular).unwrap();
+            let inode = yfs.read_inode(inum).unwrap();
+            assert_eq!(inode.reuse, 0);
+
+            yfs.remove_hard_link(ROOT_INODE, c"foo").unwrap();
+            let inum = yfs.create(ROOT_INODE, c"foo", InodeType::Regular).unwrap();
+            let inode = yfs.read_inode(inum).unwrap();
+            assert_eq!(inode.reuse, 1);
+        }
     }
 
     mod create_file {
-        #[test]
-        fn test_inode_type() {}
+        use super::*;
 
         #[test]
-        fn test_inode_size() {}
+        fn test_inode_type() {
+            let mut yfs = Yfs::new(YfsDisk::empty(10, 10).unwrap()).unwrap();
+            let inum = yfs.create_file(ROOT_INODE, c"foo").unwrap();
+            let inode = yfs.read_inode(inum).unwrap();
+
+            assert_eq!(inode.type_, InodeType::Regular);
+        }
 
         #[test]
-        fn test_inode_reuse_count() {}
+        fn test_inode_size() {
+            let mut yfs = Yfs::new(YfsDisk::empty(10, 10).unwrap()).unwrap();
+            let inum = yfs.create_file(ROOT_INODE, c"foo").unwrap();
+            let inode = yfs.read_inode(inum).unwrap();
+
+            assert_eq!(inode.size, 0);
+        }
+
+        #[test]
+        fn test_nlink() {
+            let mut yfs = Yfs::new(YfsDisk::empty(10, 10).unwrap()).unwrap();
+            let inum = yfs.create_file(ROOT_INODE, c"foo").unwrap();
+            let inode = yfs.read_inode(inum).unwrap();
+
+            assert_eq!(inode.nlink, 1);
+        }
     }
 
     mod create_directory {
-        #[test]
-        fn test_inode_type() {}
+        use super::*;
 
         #[test]
-        fn test_directory_initial_entries() {}
+        fn test_inode_type() {
+            let mut yfs = Yfs::new(YfsDisk::empty(10, 10).unwrap()).unwrap();
+            let inum = yfs.create_directory(ROOT_INODE, c"foo").unwrap();
+            let inode = yfs.read_inode(inum).unwrap();
+
+            assert_eq!(inode.type_, InodeType::Directory);
+        }
 
         #[test]
-        fn test_directory_free_entries() {}
+        fn test_directory_initial_entries() {
+            let mut yfs = Yfs::new(YfsDisk::empty(10, 10).unwrap()).unwrap();
+            let inum = yfs.create_directory(ROOT_INODE, c"foo").unwrap();
+            let entries = yfs.read_directory(inum).unwrap();
+
+            assert_eq!(
+                entries,
+                vec![
+                    DirectoryEntry::new(inum, c".").unwrap(),
+                    DirectoryEntry::new(ROOT_INODE, c"..").unwrap()
+                ]
+            );
+        }
 
         #[test]
-        fn test_directory_nlink() {}
+        fn test_allocated_block_has_garbage() {
+            let mut yfs = Yfs::new(YfsDisk::empty(7, 2).unwrap()).unwrap();
+            let entries_block_number = 3;
+            yfs.storage
+                .write_block(entries_block_number, &[0xff; BLOCK_SIZE])
+                .unwrap();
+
+            let inum = yfs.create_directory(ROOT_INODE, c"foo").unwrap();
+            let inode = yfs.read_inode(inum).unwrap();
+            assert_eq!(inode.direct[0], entries_block_number);
+
+            let entries = yfs.read_directory(inum).unwrap();
+            assert_eq!(entries.len(), 2);
+        }
 
         #[test]
-        fn test_parent_directory_nlink() {}
+        fn test_directory_nlink() {
+            let mut yfs = Yfs::new(YfsDisk::empty(10, 10).unwrap()).unwrap();
+            let inum = yfs.create_directory(ROOT_INODE, c"foo").unwrap();
+            let inode = yfs.read_inode(inum).unwrap();
+
+            assert_eq!(inode.nlink, 2);
+        }
+
+        #[test]
+        fn test_parent_directory_nlink() {
+            let mut yfs = Yfs::new(YfsDisk::empty(10, 10).unwrap()).unwrap();
+            let root_inode = yfs.read_inode(ROOT_INODE).unwrap();
+            assert_eq!(root_inode.nlink, 2);
+
+            let _ = yfs.create_directory(ROOT_INODE, c"foo").unwrap();
+            let root_inode = yfs.read_inode(ROOT_INODE).unwrap();
+            assert_eq!(root_inode.nlink, 3);
+        }
     }
 
     mod remove_directory {
