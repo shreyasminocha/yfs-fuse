@@ -11,32 +11,28 @@ use crate::disk_format::{
 
 use super::yfs_storage::YfsStorage;
 
-/// A YFS disk with `I` inodes and `D` data blocks.
-pub struct YfsDisk<const I: usize, const D: usize> {
+/// A YFS disk.
+pub struct YfsDisk {
     /// The boot block.
     boot_sector: Block,
     /// The file system header.
     file_system_header: FileSystemHeader,
     /// The inodes.
-    pub inodes: [Inode; I],
+    pub inodes: Vec<Inode>,
     /// The blocks that hold file data.
-    pub data_blocks: [Block; D],
+    pub data_blocks: Vec<Block>,
 }
 
-impl<const I: usize, const D: usize> YfsDisk<I, D> {
-    // we add one because the first INODE_SIZE bytes in the first inode block are occupied by the
-    // file system header
-    /// The number of blocks occupied by inodes.
-    pub const NUM_INODE_BLOCKS: usize = (I + 1).div_ceil(INODES_PER_BLOCK);
-
-    /// The total number of blocks in the disk including the boot block, blocks occupied by inodes,
-    /// and data blocks.
-    pub const NUM_BLOCKS: usize = 1 + Self::NUM_INODE_BLOCKS + D;
-
+impl YfsDisk {
     /// Constructs a new [`YfsDisk`] instance.
     #[must_use]
-    pub fn new(boot_sector: Block, inodes: [Inode; I], data_blocks: [Block; D]) -> Self {
-        let file_system_header = FileSystemHeader::new(Self::NUM_BLOCKS as i32, I as i32);
+    pub fn new(boot_sector: Block, inodes: Vec<Inode>, data_blocks: Vec<Block>) -> Self {
+        let num_inodes = inodes.len();
+        // See [`Self::num_inode_blocks`]
+        let num_inode_blocks = (num_inodes + 1).div_ceil(INODES_PER_BLOCK);
+        let num_blocks = 1 + num_inode_blocks + data_blocks.len();
+
+        let file_system_header = FileSystemHeader::new(num_blocks as i32, num_inodes as i32);
 
         Self {
             boot_sector,
@@ -46,38 +42,93 @@ impl<const I: usize, const D: usize> YfsDisk<I, D> {
         }
     }
 
+    /// Constructs a [`YfsDisk`] instance with just an empty root directory. This is the minimal
+    /// valid YFS filesystem.
+    pub fn empty(num_inodes: i16, num_data_blocks: i32) -> Result<Self> {
+        ensure!(num_inodes >= 1, "invalid number of inodes: {num_inodes}");
+        ensure!(
+            num_data_blocks >= 1,
+            "invalid number of data blocks: {num_data_blocks}"
+        );
+
+        let mut disk = Self::new(
+            [0; BLOCK_SIZE],
+            vec![FREE_INODE; num_inodes.try_into()?],
+            vec![[0; BLOCK_SIZE]; num_data_blocks.try_into()?],
+        );
+
+        let root_inode_data_block = disk.num_inode_blocks() as i32 + 1;
+        let mut root_inode = Inode::new(InodeType::Directory, 0);
+        root_inode.direct[0] = root_inode_data_block;
+        root_inode.size = 2 * DIRECTORY_ENTRY_SIZE as i32;
+
+        let entries = [
+            DirectoryEntry::new(1, c".").expect("'.' is a valid name"),
+            DirectoryEntry::new(1, c"..").expect("'..' is a valid name"),
+        ];
+        let mut root_inode_data = [0; BLOCK_SIZE];
+        root_inode_data[0..DIRECTORY_ENTRY_SIZE * 2].copy_from_slice(
+            &entries
+                .map(|entry| {
+                    bincode::serialize(&entry).expect("they're both valid, serializable entries")
+                })
+                .concat(),
+        );
+
+        disk.inodes[0] = root_inode;
+        disk.write_block(root_inode_data_block, &root_inode_data)?;
+
+        Ok(disk)
+    }
+
     /// Calculates the range of inodes contained within a block, if any.
-    fn get_inode_range(block_number: BlockNumber) -> Result<Range<usize>> {
+    fn get_inode_range(&self, block_number: BlockNumber) -> Result<Range<usize>> {
         let block_number = usize::try_from(block_number)?;
 
         ensure!(
-            block_number >= 1 && block_number <= Self::NUM_INODE_BLOCKS,
+            block_number >= 1 && block_number <= self.num_inode_blocks(),
             "block number does not point to an inode block"
         );
 
         if block_number == 1 {
-            Ok(0..(INODES_PER_BLOCK - 1).min(I))
+            Ok(0..(INODES_PER_BLOCK - 1).min(self.inodes.len()))
         } else {
             let start = ((block_number - 1) * INODES_PER_BLOCK) - 1;
-            let end = ((block_number * INODES_PER_BLOCK) - 1).min(I);
+            let end = ((block_number * INODES_PER_BLOCK) - 1).min(self.inodes.len());
 
             Ok(start..end)
         }
     }
 
     /// Attempts to convert a block number into an index into the data blocks.
-    fn block_number_to_data_block_number(block_number: BlockNumber) -> Result<Option<usize>> {
+    fn block_number_to_data_block_number(
+        &self,
+        block_number: BlockNumber,
+    ) -> Result<Option<usize>> {
         let block_number = usize::try_from(block_number)?;
 
-        if block_number > Self::NUM_INODE_BLOCKS {
-            Ok(Some(block_number - Self::NUM_INODE_BLOCKS - 1))
+        if block_number > self.num_inode_blocks() {
+            Ok(Some(block_number - self.num_inode_blocks() - 1))
         } else {
             Ok(None)
         }
     }
+
+    /// Returns the number of blocks occupied by inodes.
+    fn num_inode_blocks(&self) -> usize {
+        // we add one because the first INODE_SIZE bytes in the first inode block are occupied by
+        // the file system header
+        (self.inodes.len() + 1).div_ceil(INODES_PER_BLOCK)
+    }
+
+    /// Returns the total number of blocks in the disk including the boot block, blocks occupied by
+    /// inodes, and data blocks.
+    fn num_blocks(&self) -> usize {
+        1 + self.num_inode_blocks() + self.data_blocks.len()
+    }
 }
 
-impl<const I: usize, const D: usize> YfsStorage for YfsDisk<I, D> {
+impl YfsStorage for YfsDisk {
     fn read_block(&self, block_number: BlockNumber) -> Result<Block> {
         ensure!(block_number >= 0, "invalid block number: {block_number}");
 
@@ -86,7 +137,7 @@ impl<const I: usize, const D: usize> YfsStorage for YfsDisk<I, D> {
             1 => {
                 let header_serialized = bincode::serialize(&self.file_system_header)?;
 
-                let inodes = &self.inodes[Self::get_inode_range(block_number)?];
+                let inodes = &self.inodes[self.get_inode_range(block_number)?];
                 let inodes_serialized = serialize_inodes(inodes)?;
 
                 let mut block = [header_serialized, inodes_serialized].concat();
@@ -96,8 +147,8 @@ impl<const I: usize, const D: usize> YfsStorage for YfsDisk<I, D> {
                     .try_into()
                     .expect("we resized the vector to BLOCK_SIZE")
             }
-            b if b >= 2 && b <= Self::NUM_INODE_BLOCKS => {
-                let inodes = &self.inodes[Self::get_inode_range(block_number)?];
+            b if b >= 2 && b <= self.num_inode_blocks() => {
+                let inodes = &self.inodes[self.get_inode_range(block_number)?];
 
                 let mut block = serialize_inodes(inodes)?;
                 block.resize(BLOCK_SIZE, 0);
@@ -106,8 +157,9 @@ impl<const I: usize, const D: usize> YfsStorage for YfsDisk<I, D> {
                     .try_into()
                     .expect("we resized the vector to BLOCK_SIZE")
             }
-            b if b > Self::NUM_INODE_BLOCKS && b < Self::NUM_BLOCKS => {
-                self.data_blocks[Self::block_number_to_data_block_number(block_number)?
+            b if b > self.num_inode_blocks() && b < self.num_blocks() => {
+                self.data_blocks[self
+                    .block_number_to_data_block_number(block_number)?
                     .expect("we get here only if it's a data block")]
             }
             _ => bail!("block number out of bounds"),
@@ -129,19 +181,20 @@ impl<const I: usize, const D: usize> YfsStorage for YfsDisk<I, D> {
                 let inode_bytes = &block[FS_HEADER_SIZE..];
                 let inodes: Vec<Inode> = deserialize_inodes(inode_bytes)?;
 
-                let inode_range = Self::get_inode_range(block_number)?;
+                let inode_range = self.get_inode_range(block_number)?;
                 let num_inodes = inode_range.len();
                 self.inodes[inode_range].copy_from_slice(&inodes[..num_inodes]);
             }
-            b if b >= 2 && b <= Self::NUM_INODE_BLOCKS => {
+            b if b >= 2 && b <= self.num_inode_blocks() => {
                 let inodes: Vec<Inode> = deserialize_inodes(block)?;
 
-                let inode_range = Self::get_inode_range(block_number)?;
+                let inode_range = self.get_inode_range(block_number)?;
                 let num_inodes = inode_range.len();
                 self.inodes[inode_range].copy_from_slice(&inodes[..num_inodes]);
             }
-            b if b > Self::NUM_INODE_BLOCKS && b < Self::NUM_BLOCKS => {
-                let data_block_number = Self::block_number_to_data_block_number(block_number)?
+            b if b > self.num_inode_blocks() && b < self.num_blocks() => {
+                let data_block_number = self
+                    .block_number_to_data_block_number(block_number)?
                     .expect("we get here only if it's a data block");
                 self.data_blocks[data_block_number] = *block;
             }
@@ -149,34 +202,6 @@ impl<const I: usize, const D: usize> YfsStorage for YfsDisk<I, D> {
         };
 
         Ok(())
-    }
-}
-
-impl<const I: usize, const D: usize> Default for YfsDisk<I, D> {
-    fn default() -> Self {
-        let mut disk = Self::new([0; BLOCK_SIZE], [FREE_INODE; I], [[0; BLOCK_SIZE]; D]);
-
-        let root_inode_data_block = Self::NUM_INODE_BLOCKS as i32 + 1;
-        let mut root_inode = Inode::new(InodeType::Directory, 0);
-        root_inode.direct[0] = root_inode_data_block;
-        root_inode.size = 2 * DIRECTORY_ENTRY_SIZE as i32;
-
-        let entries = [
-            DirectoryEntry::new(1, c".").expect("'.' is a valid name"),
-            DirectoryEntry::new(1, c"..").expect("'..' is a valid name"),
-        ];
-        let mut root_inode_data = [0; BLOCK_SIZE];
-        root_inode_data[0..DIRECTORY_ENTRY_SIZE * 2].copy_from_slice(
-            &entries
-                .map(|entry| bincode::serialize(&entry).unwrap())
-                .concat(),
-        );
-
-        disk.inodes[0] = root_inode;
-        disk.write_block(root_inode_data_block, &root_inode_data)
-            .unwrap();
-
-        disk
     }
 }
 
@@ -199,17 +224,26 @@ fn deserialize_inodes(bytes: &[u8]) -> Result<Vec<Inode>> {
 
 #[cfg(test)]
 mod tests {
-    use crate::disk_format::{
-        block::BLOCK_SIZE,
-        header::FS_HEADER_SIZE,
-        inode::{Inode, InodeType, FREE_INODE, INODES_PER_BLOCK, INODE_SIZE, NUM_DIRECT},
+    use crate::{
+        disk_format::{
+            block::BLOCK_SIZE,
+            directory_entry::DirectoryEntry,
+            header::FS_HEADER_SIZE,
+            inode::ROOT_INODE,
+            inode::{Inode, InodeType, FREE_INODE, INODES_PER_BLOCK, INODE_SIZE, NUM_DIRECT},
+        },
+        yfs::Yfs,
     };
 
     use super::*;
 
     #[test]
     fn test_file_system_header() {
-        let yfs_disk = YfsDisk::new(EMPTY_BLOCK, [FREE_INODE], [EMPTY_BLOCK, EMPTY_BLOCK]);
+        let yfs_disk = YfsDisk::new(
+            EMPTY_BLOCK,
+            vec![FREE_INODE],
+            vec![EMPTY_BLOCK, EMPTY_BLOCK],
+        );
 
         assert_eq!(yfs_disk.file_system_header.num_inodes, 1);
         assert_eq!(yfs_disk.file_system_header.num_blocks, 1 + 1 + 2);
@@ -217,7 +251,7 @@ mod tests {
 
     #[test]
     fn test_num_blocks_no_inodes() {
-        let yfs_disk = YfsDisk::new(EMPTY_BLOCK, [], []);
+        let yfs_disk = YfsDisk::new(EMPTY_BLOCK, vec![], vec![]);
 
         assert_eq!(yfs_disk.file_system_header.num_inodes, 0);
         assert_eq!(yfs_disk.file_system_header.num_blocks, 1 + 1);
@@ -225,20 +259,12 @@ mod tests {
 
     #[test]
     fn test_num_inode_blocks_block_boundary() {
-        let yfs_disk = YfsDisk::<7, 2>::new(
-            EMPTY_BLOCK,
-            [FREE_INODE].repeat(7).try_into().unwrap(),
-            [EMPTY_BLOCK].repeat(2).try_into().unwrap(),
-        );
+        let yfs_disk = YfsDisk::new(EMPTY_BLOCK, [FREE_INODE].repeat(7), [EMPTY_BLOCK].repeat(2));
 
         assert_eq!(yfs_disk.file_system_header.num_inodes, 7);
         assert_eq!(yfs_disk.file_system_header.num_blocks, 1 + 1 + 2);
 
-        let yfs_disk = YfsDisk::<8, 2>::new(
-            EMPTY_BLOCK,
-            [FREE_INODE].repeat(8).try_into().unwrap(),
-            [EMPTY_BLOCK].repeat(2).try_into().unwrap(),
-        );
+        let yfs_disk = YfsDisk::new(EMPTY_BLOCK, [FREE_INODE].repeat(8), [EMPTY_BLOCK].repeat(2));
 
         assert_eq!(yfs_disk.file_system_header.num_inodes, 8);
         assert_eq!(yfs_disk.file_system_header.num_blocks, 1 + 2 + 2);
@@ -250,19 +276,19 @@ mod tests {
         #[test]
         fn test_read_boot_sector() {
             let boot_sector = [0xfe; BLOCK_SIZE];
-            let yfs_disk = YfsDisk::new(boot_sector, [FREE_INODE], [EMPTY_BLOCK]);
+            let yfs_disk = YfsDisk::new(boot_sector, vec![FREE_INODE], vec![EMPTY_BLOCK]);
 
             assert_eq!(yfs_disk.read_block(0).unwrap(), boot_sector);
         }
 
         #[test]
         fn test_read_out_of_bounds_block() {
-            let yfs_disk = YfsDisk::new(EMPTY_BLOCK, [FREE_INODE], [EMPTY_BLOCK]);
+            let yfs_disk = YfsDisk::new(EMPTY_BLOCK, vec![FREE_INODE], vec![EMPTY_BLOCK]);
             assert!(yfs_disk.read_block(2).is_ok());
             assert!(yfs_disk.read_block(3).is_err());
             assert!(yfs_disk.read_block(4).is_err());
 
-            let yfs_disk = YfsDisk::new(EMPTY_BLOCK, [FREE_INODE; 7], [EMPTY_BLOCK; 5]);
+            let yfs_disk = YfsDisk::new(EMPTY_BLOCK, vec![FREE_INODE; 7], vec![EMPTY_BLOCK; 5]);
             assert!(yfs_disk.read_block(6).is_ok());
             assert!(yfs_disk.read_block(7).is_err());
             assert!(yfs_disk.read_block(8).is_err());
@@ -270,7 +296,7 @@ mod tests {
 
         #[test]
         fn test_read_block_one_empty() {
-            let yfs_disk = YfsDisk::new(EMPTY_BLOCK, [], [[0xfe; BLOCK_SIZE]]);
+            let yfs_disk = YfsDisk::new(EMPTY_BLOCK, vec![], vec![[0xfe; BLOCK_SIZE]]);
             let block_one = yfs_disk.read_block(1).unwrap();
 
             let header_bytes = &block_one[..FS_HEADER_SIZE];
@@ -290,7 +316,7 @@ mod tests {
             let inodes = [EMPTY_DIRECTORY_INODE, EMPTY_FILE_INODE, EMPTY_FILE_INODE];
             let num_inodes = inodes.len();
 
-            let yfs_disk = YfsDisk::new(EMPTY_BLOCK, inodes, [[0xfe; BLOCK_SIZE]]);
+            let yfs_disk = YfsDisk::new(EMPTY_BLOCK, inodes.to_vec(), vec![[0xfe; BLOCK_SIZE]]);
 
             let block_one = yfs_disk.read_block(1).unwrap();
             for (i, inode_bytes) in block_one.chunks(INODE_SIZE).skip(1).enumerate() {
@@ -314,7 +340,7 @@ mod tests {
                 FREE_INODE,
             ];
 
-            let yfs_disk = YfsDisk::new(EMPTY_BLOCK, inodes, [[0xfe; BLOCK_SIZE]]);
+            let yfs_disk = YfsDisk::new(EMPTY_BLOCK, inodes.to_vec(), vec![[0xfe; BLOCK_SIZE]]);
 
             let block_one = yfs_disk.read_block(1).unwrap();
             for (i, inode_bytes) in block_one.chunks(INODE_SIZE).skip(1).enumerate() {
@@ -337,7 +363,7 @@ mod tests {
                 EMPTY_DIRECTORY_INODE,
             ];
 
-            let yfs_disk = YfsDisk::new(EMPTY_BLOCK, inodes, [[0xfe; BLOCK_SIZE]]);
+            let yfs_disk = YfsDisk::new(EMPTY_BLOCK, inodes.to_vec(), vec![[0xfe; BLOCK_SIZE]]);
 
             let second_block = yfs_disk.read_block(2).unwrap();
             let second_block_inodes = &inodes[INODES_PER_BLOCK - 1..];
@@ -358,11 +384,7 @@ mod tests {
             let inodes = [EMPTY_FILE_INODE].repeat(7 + 8);
             let inodes = inodes.as_slice();
 
-            let yfs_disk = YfsDisk::<15, 1>::new(
-                EMPTY_BLOCK,
-                inodes.try_into().unwrap(),
-                [[0xfe; BLOCK_SIZE]],
-            );
+            let yfs_disk = YfsDisk::new(EMPTY_BLOCK, inodes.to_vec(), vec![[0xfe; BLOCK_SIZE]]);
 
             let second_block = yfs_disk.read_block(2).unwrap();
             let second_block_inodes = &inodes[INODES_PER_BLOCK - 1..];
@@ -378,7 +400,7 @@ mod tests {
             let inodes = [EMPTY_DIRECTORY_INODE, EMPTY_FILE_INODE, EMPTY_FILE_INODE];
             let data_blocks = [[0xfe; BLOCK_SIZE]];
 
-            let yfs_disk = YfsDisk::new(EMPTY_BLOCK, inodes, data_blocks);
+            let yfs_disk = YfsDisk::new(EMPTY_BLOCK, inodes.to_vec(), data_blocks.to_vec());
 
             let block = yfs_disk.read_block(2).unwrap();
             assert_eq!(block, data_blocks[0]);
@@ -398,7 +420,7 @@ mod tests {
             ];
             let data_blocks = [[0xab; BLOCK_SIZE], [0xcd; BLOCK_SIZE], [0xef; BLOCK_SIZE]];
 
-            let yfs_disk = YfsDisk::new(EMPTY_BLOCK, inodes, data_blocks);
+            let yfs_disk = YfsDisk::new(EMPTY_BLOCK, inodes.to_vec(), data_blocks.to_vec());
 
             let block = yfs_disk.read_block(5).unwrap();
             assert_eq!(block, data_blocks[2]);
@@ -410,7 +432,7 @@ mod tests {
 
         #[test]
         fn test_write_boot_sector() {
-            let mut yfs_disk = YfsDisk::new(EMPTY_BLOCK, [FREE_INODE], [EMPTY_BLOCK]);
+            let mut yfs_disk = YfsDisk::new(EMPTY_BLOCK, vec![FREE_INODE], vec![EMPTY_BLOCK]);
 
             let boot_sector = [0xfe; BLOCK_SIZE];
             yfs_disk.write_block(0, &boot_sector).unwrap();
@@ -419,12 +441,12 @@ mod tests {
 
         #[test]
         fn test_write_out_of_bounds_block() {
-            let mut yfs_disk = YfsDisk::new(EMPTY_BLOCK, [FREE_INODE], [EMPTY_BLOCK]);
+            let mut yfs_disk = YfsDisk::new(EMPTY_BLOCK, vec![FREE_INODE], vec![EMPTY_BLOCK]);
             assert!(yfs_disk.write_block(2, &EMPTY_BLOCK).is_ok());
             assert!(yfs_disk.write_block(3, &EMPTY_BLOCK).is_err());
             assert!(yfs_disk.write_block(4, &EMPTY_BLOCK).is_err());
 
-            let mut yfs_disk = YfsDisk::new(EMPTY_BLOCK, [FREE_INODE; 7], [EMPTY_BLOCK; 5]);
+            let mut yfs_disk = YfsDisk::new(EMPTY_BLOCK, vec![FREE_INODE; 7], vec![EMPTY_BLOCK; 5]);
             assert!(yfs_disk.write_block(6, &EMPTY_BLOCK).is_ok());
             assert!(yfs_disk.write_block(7, &EMPTY_BLOCK).is_err());
             assert!(yfs_disk.write_block(8, &EMPTY_BLOCK).is_err());
@@ -432,7 +454,7 @@ mod tests {
 
         #[test]
         fn test_write_block_one() {
-            let mut yfs_disk = YfsDisk::new(EMPTY_BLOCK, [FREE_INODE], [EMPTY_BLOCK]);
+            let mut yfs_disk = YfsDisk::new(EMPTY_BLOCK, vec![FREE_INODE], vec![EMPTY_BLOCK]);
             let header = &yfs_disk.file_system_header;
 
             let mut block = EMPTY_BLOCK;
@@ -449,7 +471,8 @@ mod tests {
 
         #[test]
         fn test_write_inode_block() {
-            let mut yfs_disk = YfsDisk::new(EMPTY_BLOCK, [FREE_INODE; 10], [[0xfe; BLOCK_SIZE]]);
+            let mut yfs_disk =
+                YfsDisk::new(EMPTY_BLOCK, vec![FREE_INODE; 10], vec![[0xfe; BLOCK_SIZE]]);
 
             let mut block = EMPTY_BLOCK;
             let inodes = [EMPTY_FILE_INODE, EMPTY_FILE_INODE, EMPTY_FILE_INODE];
@@ -470,8 +493,8 @@ mod tests {
         fn test_write_data_block() {
             let mut yfs_disk = YfsDisk::new(
                 EMPTY_BLOCK,
-                [FREE_INODE; 3],
-                [EMPTY_BLOCK, EMPTY_BLOCK, EMPTY_BLOCK],
+                vec![FREE_INODE; 3],
+                vec![EMPTY_BLOCK, EMPTY_BLOCK, EMPTY_BLOCK],
             );
 
             let block = [0; BLOCK_SIZE];
@@ -481,6 +504,41 @@ mod tests {
             let block = [1; BLOCK_SIZE];
             yfs_disk.write_block(3, &block).unwrap();
             assert_eq!(yfs_disk.data_blocks[1], block);
+        }
+    }
+
+    mod empty {
+        use super::*;
+
+        #[test]
+        fn test_num_used_inodes() {
+            let yfs_disk = YfsDisk::empty(10, 10).unwrap();
+            let yfs = Yfs::new(yfs_disk).unwrap();
+
+            assert_eq!(10 - yfs.num_free_blocks(), 1);
+        }
+
+        #[test]
+        fn test_root_directory_exists() {
+            let yfs_disk = YfsDisk::empty(10, 10).unwrap();
+            let yfs = Yfs::new(yfs_disk).unwrap();
+
+            assert!(yfs.read_directory(ROOT_INODE).is_ok());
+        }
+
+        #[test]
+        fn test_root_directory_is_empty() {
+            let yfs_disk = YfsDisk::empty(10, 10).unwrap();
+            let yfs = Yfs::new(yfs_disk).unwrap();
+            let root_directory_entries: Vec<_> = yfs.read_directory(ROOT_INODE).unwrap();
+
+            assert_eq!(
+                root_directory_entries,
+                vec![
+                    DirectoryEntry::new(ROOT_INODE, c".").unwrap(),
+                    DirectoryEntry::new(ROOT_INODE, c"..").unwrap()
+                ]
+            );
         }
     }
 
