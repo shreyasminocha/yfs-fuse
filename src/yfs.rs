@@ -582,6 +582,13 @@ impl<S: YfsStorage> Yfs<S> {
             "inode is not a directory: {parent_inum}"
         );
 
+        ensure!(
+            self.lookup_entry(parent_inum, CString::from(&entry.name).as_c_str())?
+                .is_none(),
+            "entry with same name already exists: {}",
+            entry.name
+        );
+
         let entries = self.read_directory_entries(parent_inum)?;
         let free_entry_index = entries.iter().position(|entry| entry.inum == 0);
         let new_entry_index = free_entry_index.unwrap_or(entries.len());
@@ -1094,7 +1101,7 @@ mod tests {
 
         #[test]
         fn test_entry_already_exists() {
-            let mut yfs = Yfs::new(YfsDisk::empty(1, 10).unwrap()).unwrap();
+            let mut yfs = Yfs::new(YfsDisk::empty(10, 10).unwrap()).unwrap();
             let _ = yfs.create(ROOT_INODE, c"foo", InodeType::Regular);
 
             assert!(yfs.create(ROOT_INODE, c"foo", InodeType::Regular).is_err());
