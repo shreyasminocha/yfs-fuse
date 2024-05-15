@@ -201,6 +201,7 @@ impl<S: YfsStorage> Yfs<S> {
         info!("[inode #{inum}] reading file (offset = {offset}; size = {size})");
 
         let inode = self.read_inode(inum)?;
+        ensure!(inode.type_ != InodeType::Free, "inode is free: {inum}");
 
         let end = (offset + size).min(inode.size as usize);
 
@@ -248,6 +249,7 @@ impl<S: YfsStorage> Yfs<S> {
         // we're careful to read the inode *after* potentially growing the file
         // because that operation manipulates the inode
         let mut inode = self.read_inode(inum)?;
+        ensure!(inode.type_ != InodeType::Free, "inode is free: {inum}");
 
         let mut write_len = 0;
         while position < end {
@@ -665,6 +667,8 @@ impl<S: YfsStorage> Yfs<S> {
     /// Frees any allocated blocks and marks the inode as free. Increments the inode's reuse count.
     fn delete_inode(&mut self, inum: InodeNumber) -> Result<()> {
         let inode = self.read_inode(inum)?;
+        ensure!(inode.type_ != InodeType::Free, "inode is free: {inum}");
+
         let allocated_blocks = self.get_inode_allocated_block_numbers(inode)?;
 
         allocated_blocks
@@ -680,6 +684,7 @@ impl<S: YfsStorage> Yfs<S> {
     /// Does not update the size stored in the inode.
     fn grow_file(&mut self, inum: InodeNumber, new_size: usize) -> Result<()> {
         let mut inode = self.read_inode(inum)?;
+        ensure!(inode.type_ != InodeType::Free, "inode is free: {inum}");
 
         if new_size <= inode.size as usize {
             // no need to grow the file
