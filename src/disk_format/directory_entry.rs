@@ -1,6 +1,6 @@
 use std::{
     ffi::{CStr, CString},
-    fmt,
+    fmt::{self, Debug},
     mem::size_of,
 };
 
@@ -50,9 +50,17 @@ impl DirectoryEntry {
 /// A name, as used in [`DirectoryEntry`].
 ///
 /// A maximum of 30-byte-long names are supported.
-#[derive(Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[repr(C)]
 pub struct DirectoryEntryName([u8; 30]);
+
+impl Debug for DirectoryEntryName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("DirectoryEntryName")
+            .field(&CString::from(self))
+            .finish()
+    }
+}
 
 impl TryFrom<&CStr> for DirectoryEntryName {
     type Error = anyhow::Error;

@@ -1413,61 +1413,232 @@ mod tests {
     }
 
     mod create_hard_link {
-        #[test]
-        fn test_link_directory() {}
+        use super::*;
 
         #[test]
-        fn test_link_free_inode() {}
+        fn test_link_directory() {
+            let mut yfs = Yfs::new(YfsDisk::empty(10, 10).unwrap()).unwrap();
+            let inum = yfs.create_directory(ROOT_INODE, c"foo").unwrap();
+
+            assert!(yfs.create_hard_link(ROOT_INODE, c"bar", inum).is_err());
+        }
 
         #[test]
-        fn test_link_invalid_parent() {}
+        fn test_link_free_inode() {
+            let mut yfs = Yfs::new(YfsDisk::empty(10, 10).unwrap()).unwrap();
+
+            assert!(yfs.create_hard_link(ROOT_INODE, c"foo", 2).is_err());
+        }
 
         #[test]
-        fn test_link_file_parent() {}
+        fn test_invalid_parent() {
+            let mut yfs = Yfs::new(YfsDisk::empty(10, 10).unwrap()).unwrap();
+            let inum = yfs.create_file(ROOT_INODE, c"foo").unwrap();
+
+            assert!(yfs.create_hard_link(2, c"foo", inum).is_err());
+        }
 
         #[test]
-        fn test_link_duplicate_name() {}
+        fn test_link_file_parent() {
+            let mut yfs = Yfs::new(YfsDisk::empty(10, 10).unwrap()).unwrap();
+            let foo_inum = yfs.create_file(ROOT_INODE, c"foo").unwrap();
+            let bar_inum = yfs.create_file(ROOT_INODE, c"bar").unwrap();
+
+            assert!(yfs.create_hard_link(foo_inum, c"baz", bar_inum).is_err());
+        }
 
         #[test]
-        fn test_link_sibling() {}
+        fn test_link_duplicate_name() {
+            let mut yfs = Yfs::new(YfsDisk::empty(10, 10).unwrap()).unwrap();
+            let foo_inum = yfs.create_file(ROOT_INODE, c"foo").unwrap();
+            let _ = yfs.create_file(ROOT_INODE, c"bar").unwrap();
+
+            assert!(yfs.create_hard_link(ROOT_INODE, c"bar", foo_inum).is_err());
+        }
 
         #[test]
-        fn test_link_parent_sibling() {}
+        fn test_link_sibling() {
+            let mut yfs = Yfs::new(YfsDisk::empty(10, 10).unwrap()).unwrap();
+            let foo_inum = yfs.create_file(ROOT_INODE, c"foo").unwrap();
+            yfs.create_hard_link(ROOT_INODE, c"bar", foo_inum).unwrap();
+
+            let foo_inum = yfs.lookup_entry(ROOT_INODE, c"foo").unwrap().unwrap();
+            let bar_inum = yfs.lookup_entry(ROOT_INODE, c"bar").unwrap().unwrap();
+
+            assert_eq!(foo_inum, bar_inum);
+        }
 
         #[test]
-        fn test_nlink_updated() {}
+        fn test_link_non_sibling() {
+            let mut yfs = Yfs::new(YfsDisk::empty(10, 10).unwrap()).unwrap();
+            let foo_inum = yfs.create_file(ROOT_INODE, c"foo").unwrap();
+            let parent_inum = yfs.create_directory(ROOT_INODE, c"a").unwrap();
+            let parent_inum = yfs.create_directory(parent_inum, c"b").unwrap();
+            let parent_inum = yfs.create_directory(parent_inum, c"c").unwrap();
+
+            yfs.create_hard_link(parent_inum, c"bar", foo_inum).unwrap();
+
+            let foo_inum = yfs.lookup_entry(ROOT_INODE, c"foo").unwrap().unwrap();
+            let bar_inum = yfs.lookup_entry(parent_inum, c"bar").unwrap().unwrap();
+
+            assert_eq!(foo_inum, bar_inum);
+        }
+
+        #[test]
+        fn test_nlink_updated() {
+            let mut yfs = Yfs::new(YfsDisk::empty(10, 10).unwrap()).unwrap();
+            let inum = yfs.create_file(ROOT_INODE, c"foo").unwrap();
+
+            let old_nlink = yfs.read_inode(inum).unwrap().nlink;
+            yfs.create_hard_link(ROOT_INODE, c"bar", inum).unwrap();
+            let new_nlink = yfs.read_inode(inum).unwrap().nlink;
+
+            assert_eq!(new_nlink, old_nlink + 1);
+        }
     }
 
     mod remove_hard_link {
-        #[test]
-        fn test_unlink_invalid_parent() {}
+        use super::*;
 
         #[test]
-        fn test_unlink_dot() {}
+        fn test_invalid_parent() {
+            let mut yfs = Yfs::new(YfsDisk::empty(10, 10).unwrap()).unwrap();
+            let inum = yfs.create_file(ROOT_INODE, c"foo").unwrap();
+            let _ = yfs.create_hard_link(ROOT_INODE, c"bar", inum);
+
+            assert!(yfs.remove_hard_link(2, c"bar").is_err());
+        }
 
         #[test]
-        fn test_unlink_dot_dot() {}
+        fn test_unlink_dot() {
+            let mut yfs = Yfs::new(YfsDisk::empty(10, 10).unwrap()).unwrap();
+
+            assert!(yfs.remove_hard_link(ROOT_INODE, c".").is_err());
+        }
 
         #[test]
-        fn test_unlink_non_existent_entry() {}
+        fn test_unlink_dot_dot() {
+            let mut yfs = Yfs::new(YfsDisk::empty(10, 10).unwrap()).unwrap();
+
+            assert!(yfs.remove_hard_link(ROOT_INODE, c"..").is_err());
+        }
 
         #[test]
-        fn test_unlink_removes_entry() {}
+        fn test_unlink_non_existent_entry() {
+            let mut yfs = Yfs::new(YfsDisk::empty(10, 10).unwrap()).unwrap();
+
+            assert!(yfs.remove_hard_link(ROOT_INODE, c"foo").is_err());
+        }
 
         #[test]
-        fn test_unlink_directory() {}
+        fn test_unlink_directory() {
+            let mut yfs = Yfs::new(YfsDisk::empty(10, 10).unwrap()).unwrap();
+            let _ = yfs.create_directory(ROOT_INODE, c"foo");
+
+            assert!(yfs.remove_hard_link(2, c"foo").is_err());
+        }
 
         #[test]
-        fn test_unlink_does_not_remove_file_with_links() {}
+        fn test_removes_entry() {
+            let mut yfs = Yfs::new(YfsDisk::empty(10, 10).unwrap()).unwrap();
+            let _ = yfs.create_file(ROOT_INODE, c"foo").unwrap();
+            assert!(yfs.lookup_entry(ROOT_INODE, c"foo").unwrap().is_some());
+
+            yfs.remove_hard_link(ROOT_INODE, c"foo").unwrap();
+            assert!(yfs.lookup_entry(ROOT_INODE, c"foo").unwrap().is_none());
+        }
 
         #[test]
-        fn test_unlink_decrements_nlink() {}
+        fn test_does_not_remove_file_with_links() {
+            let mut yfs = Yfs::new(YfsDisk::empty(10, 10).unwrap()).unwrap();
+            let inum = yfs.create_file(ROOT_INODE, c"foo").unwrap();
+            let data = b"stuff";
+            yfs.write_file(inum, 0, data).unwrap();
+
+            yfs.create_hard_link(ROOT_INODE, c"bar", inum).unwrap();
+            yfs.remove_hard_link(ROOT_INODE, c"bar").unwrap();
+
+            assert_eq!(yfs.read_file(inum, 0, 512).unwrap(), data);
+        }
 
         #[test]
-        fn test_unlink_frees_inode() {}
+        fn test_removes_file_without_links() {
+            let mut yfs = Yfs::new(YfsDisk::empty(10, 10).unwrap()).unwrap();
+            let inum = yfs.create_file(ROOT_INODE, c"foo").unwrap();
+            yfs.write_file(inum, 0, b"stuff").unwrap();
+
+            yfs.remove_hard_link(ROOT_INODE, c"foo").unwrap();
+
+            assert!(yfs.read_file(inum, 0, 512).is_err());
+        }
 
         #[test]
-        fn test_unlink_frees_blocks() {}
+        fn test_remove_created_link() {
+            let mut yfs = Yfs::new(YfsDisk::empty(10, 10).unwrap()).unwrap();
+            let inum = yfs.create_file(ROOT_INODE, c"foo").unwrap();
+
+            yfs.create_hard_link(ROOT_INODE, c"bar", inum).unwrap();
+            assert!(yfs.lookup_entry(ROOT_INODE, c"bar").unwrap().is_some());
+
+            yfs.remove_hard_link(ROOT_INODE, c"bar").unwrap();
+
+            assert!(yfs.lookup_entry(ROOT_INODE, c"bar").unwrap().is_none());
+            assert!(yfs.lookup_entry(ROOT_INODE, c"foo").unwrap().is_some());
+        }
+
+        #[test]
+        fn test_remove_original() {
+            let mut yfs = Yfs::new(YfsDisk::empty(10, 10).unwrap()).unwrap();
+            let inum = yfs.create_file(ROOT_INODE, c"foo").unwrap();
+
+            yfs.create_hard_link(ROOT_INODE, c"bar", inum).unwrap();
+            assert!(yfs.lookup_entry(ROOT_INODE, c"bar").unwrap().is_some());
+
+            yfs.remove_hard_link(ROOT_INODE, c"foo").unwrap();
+
+            assert!(yfs.lookup_entry(ROOT_INODE, c"foo").unwrap().is_none());
+            assert!(yfs.lookup_entry(ROOT_INODE, c"bar").unwrap().is_some());
+        }
+
+        #[test]
+        fn test_decrements_nlink() {
+            let mut yfs = Yfs::new(YfsDisk::empty(10, 10).unwrap()).unwrap();
+            let inum = yfs.create_file(ROOT_INODE, c"foo").unwrap();
+            yfs.create_hard_link(ROOT_INODE, c"bar", inum).unwrap();
+
+            let old_nlink = yfs.read_inode(inum).unwrap().nlink;
+            yfs.remove_hard_link(ROOT_INODE, c"foo").unwrap();
+            let new_nlink = yfs.read_inode(inum).unwrap().nlink;
+
+            assert_eq!(new_nlink, old_nlink - 1);
+        }
+
+        #[test]
+        fn test_frees_inode() {
+            let mut yfs = Yfs::new(YfsDisk::empty(2, 10).unwrap()).unwrap();
+            let _ = yfs.create_file(ROOT_INODE, c"foo").unwrap();
+
+            assert!(yfs.create_file(ROOT_INODE, c"bar").is_err());
+
+            yfs.remove_hard_link(ROOT_INODE, c"foo").unwrap();
+
+            assert!(yfs.create_file(ROOT_INODE, c"bar").is_ok());
+        }
+
+        #[test]
+        fn test_frees_blocks() {
+            let mut yfs = Yfs::new(YfsDisk::empty(10, 2).unwrap()).unwrap();
+            let inum = yfs.create_file(ROOT_INODE, c"foo").unwrap();
+            yfs.write_file(inum, 0, b"stuff").unwrap();
+
+            assert_eq!(yfs.num_free_blocks(), 0);
+            assert!(yfs.create_directory(ROOT_INODE, c"bar").is_err());
+
+            yfs.remove_hard_link(ROOT_INODE, c"foo").unwrap();
+            assert!(yfs.num_free_blocks() > 0);
+
+            assert!(yfs.create_directory(ROOT_INODE, c"baz").is_ok());
+        }
     }
 
     mod rename {
