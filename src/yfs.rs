@@ -1064,6 +1064,257 @@ mod tests {
         fn test_directory_loop() {}
     }
 
+    mod read_directory {
+        use super::*;
+
+        #[test]
+        fn test_invalid_inum() {
+            let yfs = Yfs::new(YfsDisk::empty(10, 10).unwrap()).unwrap();
+
+            assert!(yfs.read_directory(5).is_err());
+        }
+
+        #[test]
+        fn test_non_directory() {
+            let mut yfs = Yfs::new(YfsDisk::empty(10, 10).unwrap()).unwrap();
+            let inum = yfs.create_file(ROOT_INODE, c"foo").unwrap();
+
+            assert!(yfs.read_directory(inum).is_err());
+        }
+
+        #[test]
+        fn test_empty_directory() {
+            let yfs = Yfs::new(YfsDisk::empty(10, 10).unwrap()).unwrap();
+            let entries = yfs.read_directory(ROOT_INODE).unwrap();
+
+            assert_eq!(
+                entries,
+                vec![
+                    DirectoryEntry::new(ROOT_INODE, c".").unwrap(),
+                    DirectoryEntry::new(ROOT_INODE, c"..").unwrap(),
+                ]
+            );
+        }
+
+        #[test]
+        fn test_some_entries() {
+            let mut yfs = Yfs::new(YfsDisk::empty(10, 10).unwrap()).unwrap();
+
+            let entries = [
+                // invalid, but good enough
+                DirectoryEntry::new(5, c"foo").unwrap(),
+                DirectoryEntry::new(6, c"bar").unwrap(),
+            ];
+            yfs.write_file(
+                ROOT_INODE,
+                2 * DIRECTORY_ENTRY_SIZE,
+                &entries
+                    .iter()
+                    .map(|entry| bincode::serialize(&entry).unwrap())
+                    .collect::<Vec<_>>()
+                    .concat(),
+            )
+            .unwrap();
+
+            let read_entries = yfs.read_directory(ROOT_INODE).unwrap();
+            assert!(entries.iter().all(|entry| read_entries.contains(entry)));
+        }
+
+        #[test]
+        fn test_maximum_number_of_entries() {
+            let mut yfs = Yfs::new(YfsDisk::empty(2500, 2500).unwrap()).unwrap();
+            let existing_entries = yfs.read_directory(ROOT_INODE).unwrap();
+            let max_entries = (MAX_FILE_SIZE as usize).div_floor(DIRECTORY_ENTRY_SIZE);
+
+            for i in 0..(max_entries - existing_entries.len()) {
+                let name = CString::new(i.to_string()).unwrap();
+                let _ = yfs.create_file(ROOT_INODE, &name).unwrap();
+            }
+
+            let entries = yfs.read_directory(ROOT_INODE).unwrap();
+            assert_eq!(entries.len(), max_entries);
+        }
+
+        #[test]
+        fn test_entries_past_size() {
+            let mut yfs = Yfs::new(YfsDisk::empty(10, 10).unwrap()).unwrap();
+
+            let entry = DirectoryEntry::new(5, c"foo").unwrap(); // invalid, but good enough
+            yfs.write_file(
+                ROOT_INODE,
+                2 * DIRECTORY_ENTRY_SIZE,
+                &bincode::serialize(&entry).unwrap(),
+            )
+            .unwrap();
+
+            yfs.update_inode(ROOT_INODE, |inode| {
+                inode.size = 2 * DIRECTORY_ENTRY_SIZE as i32
+            })
+            .unwrap();
+
+            assert!(!yfs.read_directory(ROOT_INODE).unwrap().contains(&entry));
+        }
+
+        #[test]
+        fn test_free_entries_are_filtered() {
+            let mut yfs = Yfs::new(YfsDisk::empty(10, 10).unwrap()).unwrap();
+
+            let entries = [
+                // invalid, but good enough
+                DirectoryEntry::new(0, c"foo").unwrap(),
+                DirectoryEntry::new(0, c"bar").unwrap(),
+                DirectoryEntry::new(6, c"baz").unwrap(),
+                DirectoryEntry::new(0, c"yee").unwrap(),
+                DirectoryEntry::new(7, c"haw").unwrap(),
+            ];
+            yfs.write_file(
+                ROOT_INODE,
+                2 * DIRECTORY_ENTRY_SIZE,
+                &entries
+                    .iter()
+                    .map(|entry| bincode::serialize(&entry).unwrap())
+                    .collect::<Vec<_>>()
+                    .concat(),
+            )
+            .unwrap();
+
+            let read_entries = yfs.read_directory(ROOT_INODE).unwrap();
+
+            assert!(entries
+                .iter()
+                .filter(|entry| entry.inum != 0)
+                .all(|entry| read_entries.contains(entry)));
+
+            assert!(read_entries.iter().all(|entry| entry.inum != 0));
+        }
+    }
+
+    mod lookup_entry {
+        use super::*;
+
+        #[test]
+        fn test_invalid_inum() {
+            let yfs = Yfs::new(YfsDisk::empty(10, 10).unwrap()).unwrap();
+
+            assert!(yfs.lookup_entry(5, c"foo").is_err());
+        }
+
+        #[test]
+        fn test_non_directory() {
+            let mut yfs = Yfs::new(YfsDisk::empty(10, 10).unwrap()).unwrap();
+            let inum = yfs.create_file(ROOT_INODE, c"foo").unwrap();
+
+            assert!(yfs.lookup_entry(inum, c"bar").is_err());
+        }
+
+        #[test]
+        fn test_entry_missing() {
+            let yfs = Yfs::new(YfsDisk::empty(10, 10).unwrap()).unwrap();
+
+            assert!(yfs.lookup_entry(ROOT_INODE, c"foo").unwrap().is_none());
+        }
+
+        #[test]
+        fn test_entry_dot() {
+            let yfs = Yfs::new(YfsDisk::empty(10, 10).unwrap()).unwrap();
+
+            assert_eq!(
+                yfs.lookup_entry(ROOT_INODE, c".").unwrap().unwrap(),
+                ROOT_INODE
+            );
+        }
+
+        #[test]
+        fn test_entry_dot_dot() {
+            let yfs = Yfs::new(YfsDisk::empty(10, 10).unwrap()).unwrap();
+
+            assert_eq!(
+                yfs.lookup_entry(ROOT_INODE, c"..").unwrap().unwrap(),
+                ROOT_INODE
+            );
+        }
+
+        #[test]
+        fn test_entry_present() {
+            let mut yfs = Yfs::new(YfsDisk::empty(10, 10).unwrap()).unwrap();
+            let foo_inum = yfs.create_directory(ROOT_INODE, c"foo").unwrap();
+            let bar_inum = yfs.create_file(foo_inum, c"bar").unwrap();
+
+            assert_eq!(
+                yfs.lookup_entry(foo_inum, c"bar").unwrap().unwrap(),
+                bar_inum
+            );
+        }
+
+        #[test]
+        fn test_entries_several_blocks_in() {
+            let mut yfs = Yfs::new(YfsDisk::empty(100, 100).unwrap()).unwrap();
+            let num_entries = 5 * DIRECTORY_ENTRIES_PER_BLOCK;
+
+            for i in 0..num_entries {
+                let name = CString::new(i.to_string()).unwrap();
+                let inum = yfs.create_file(ROOT_INODE, &name).unwrap();
+
+                assert_eq!(yfs.lookup_entry(ROOT_INODE, &name).unwrap().unwrap(), inum);
+            }
+        }
+
+        #[test]
+        fn test_entry_with_zero_inode() {
+            let mut yfs = Yfs::new(YfsDisk::empty(10, 10).unwrap()).unwrap();
+
+            let fake_entry = DirectoryEntry::new(0, c"foo").unwrap();
+            yfs.write_file(
+                ROOT_INODE,
+                2 * DIRECTORY_ENTRY_SIZE,
+                &bincode::serialize(&fake_entry).unwrap(),
+            )
+            .unwrap();
+
+            assert!(yfs.lookup_entry(ROOT_INODE, c"foo").unwrap().is_none());
+        }
+
+        #[test]
+        fn test_entry_after_free_entries() {
+            let mut yfs = Yfs::new(YfsDisk::empty(10, 10).unwrap()).unwrap();
+
+            let fake_entry = DirectoryEntry::new(0, c"foo").unwrap();
+            let actual_entry = DirectoryEntry::new(5, c"bar").unwrap(); // still invalid, but good enough
+            yfs.write_file(
+                ROOT_INODE,
+                2 * DIRECTORY_ENTRY_SIZE,
+                &[
+                    bincode::serialize(&fake_entry).unwrap(),
+                    bincode::serialize(&actual_entry).unwrap(),
+                ]
+                .concat(),
+            )
+            .unwrap();
+
+            assert_eq!(yfs.lookup_entry(ROOT_INODE, c"bar").unwrap().unwrap(), 5);
+        }
+
+        #[test]
+        fn test_entry_past_size() {
+            let mut yfs = Yfs::new(YfsDisk::empty(10, 10).unwrap()).unwrap();
+
+            let entry = DirectoryEntry::new(5, c"foo").unwrap(); // invalid, but good enough
+            yfs.write_file(
+                ROOT_INODE,
+                2 * DIRECTORY_ENTRY_SIZE,
+                &bincode::serialize(&entry).unwrap(),
+            )
+            .unwrap();
+            assert!(yfs.lookup_entry(ROOT_INODE, c"foo").unwrap().is_some());
+
+            yfs.update_inode(ROOT_INODE, |inode| {
+                inode.size = 2 * DIRECTORY_ENTRY_SIZE as i32
+            })
+            .unwrap();
+            assert!(yfs.lookup_entry(ROOT_INODE, c"foo").unwrap().is_none());
+        }
+    }
+
     mod create {
         use super::*;
 
