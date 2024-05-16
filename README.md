@@ -2,9 +2,6 @@
 
 A FUSE adapter for Yalnix File System (YFS) disks from Rice's OS class.
 
-> [!NOTE]
-> The code currently lacks tests.
-
 ## Features
 
 - [x] listing directories
@@ -21,8 +18,8 @@ A FUSE adapter for Yalnix File System (YFS) disks from Rice's OS class.
 ## Usage
 
 ```sh
-# cargo run <disk file> <mount point>
-cargo run DISK /mnt/yfs
+# cargo run --bin yfs-fuse <disk file> <mount point>
+cargo run --bin yfs-fuse DISK /mnt/yfs
 ```
 
 ## Why
