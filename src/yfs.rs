@@ -997,6 +997,14 @@ mod tests {
     use super::*;
 
     mod validation {
+        use super::*;
+
+        #[test]
+        fn test_empty_is_valid() {
+            let yfs = Yfs::new(YfsDisk::empty(10, 10).unwrap()).unwrap();
+            assert!(Yfs::new(yfs.storage).is_ok());
+        }
+
         #[test]
         fn test_invalid_num_inodes() {}
 
@@ -1004,7 +1012,17 @@ mod tests {
         fn test_negative_num_blocks() {}
 
         #[test]
-        fn test_invalid_direct_block_block() {}
+        fn test_invalid_direct_block_block() {
+            let mut yfs = Yfs::new(YfsDisk::empty(10, 10).unwrap()).unwrap();
+
+            yfs.update_inode(ROOT_INODE, |inode| inode.direct[0] = -1)
+                .unwrap();
+
+            assert!(Yfs::new(yfs.storage).is_err());
+        }
+
+        #[test]
+        fn test_invalid_indirect_block_number() {}
 
         #[test]
         fn test_invalid_indirect_block_block() {}
@@ -1025,40 +1043,112 @@ mod tests {
         fn test_inode_with_too_many_blocks() {}
 
         #[test]
-        fn test_inode_with_negative_size() {}
+        fn test_inode_with_negative_size() {
+            let mut yfs = Yfs::new(YfsDisk::empty(10, 10).unwrap()).unwrap();
+            let inum = yfs.create_file(ROOT_INODE, c"foo").unwrap();
+
+            yfs.update_inode(inum, |inode| inode.size = -5).unwrap();
+
+            assert!(Yfs::new(yfs.storage).is_err());
+        }
 
         #[test]
         fn test_inode_with_size_exceeding_the_maximum() {}
 
         #[test]
-        fn test_no_root_inode() {}
+        fn test_no_root_inode() {
+            let yfs_disk = YfsDisk::new([0; BLOCK_SIZE], vec![], vec![]);
+            assert!(Yfs::new(yfs_disk).is_err());
+        }
 
         #[test]
-        fn test_non_directory_root_inode() {}
+        fn test_non_directory_root_inode() {
+            let mut yfs = Yfs::new(YfsDisk::empty(10, 10).unwrap()).unwrap();
+
+            yfs.update_inode(ROOT_INODE, |inode| inode.type_ = InodeType::Regular)
+                .unwrap();
+
+            assert!(Yfs::new(yfs.storage).is_err());
+        }
 
         #[test]
-        fn test_directory_invalid_size() {}
+        fn test_directory_invalid_size() {
+            let mut yfs = Yfs::new(YfsDisk::empty(10, 10).unwrap()).unwrap();
+            let inum = yfs.create_directory(ROOT_INODE, c"foo").unwrap();
+
+            yfs.update_inode(inum, |inode| inode.size = 45).unwrap();
+
+            assert!(Yfs::new(yfs.storage).is_err());
+        }
 
         #[test]
         fn test_directory_invalid_entry_inum() {}
 
         #[test]
-        fn test_directory_free_entry() {}
+        fn test_directory_entry_free_inode() {}
 
         #[test]
         fn test_directory_duplicate_entries() {}
 
         #[test]
-        fn test_directory_no_dot() {}
+        fn test_directory_no_dot() {
+            let mut yfs = Yfs::new(YfsDisk::empty(10, 10).unwrap()).unwrap();
+            let inum = yfs.create_directory(ROOT_INODE, c"foo").unwrap();
+
+            yfs.write_file(
+                inum,
+                0, // assumes that '.' is the first entry
+                &bincode::serialize(&DirectoryEntry::new(ROOT_INODE, c"foo").unwrap()).unwrap(),
+            )
+            .unwrap();
+
+            assert!(Yfs::new(yfs.storage).is_err());
+        }
 
         #[test]
-        fn test_directory_invalid_dot() {}
+        fn test_directory_invalid_dot() {
+            let mut yfs = Yfs::new(YfsDisk::empty(10, 10).unwrap()).unwrap();
+            let inum = yfs.create_directory(ROOT_INODE, c"foo").unwrap();
+
+            yfs.write_file(
+                inum,
+                0,
+                &bincode::serialize(&DirectoryEntry::new(ROOT_INODE, c".").unwrap()).unwrap(),
+            )
+            .unwrap();
+
+            assert!(Yfs::new(yfs.storage).is_err());
+        }
 
         #[test]
-        fn test_directory_no_dot_dot() {}
+        fn test_directory_no_dot_dot() {
+            let mut yfs = Yfs::new(YfsDisk::empty(10, 10).unwrap()).unwrap();
+            let inum = yfs.create_directory(ROOT_INODE, c"foo").unwrap();
+
+            yfs.write_file(
+                inum,
+                DIRECTORY_ENTRY_SIZE, // assumes that '..' is the second entry
+                &bincode::serialize(&DirectoryEntry::new(ROOT_INODE, c"foo").unwrap()).unwrap(),
+            )
+            .unwrap();
+
+            assert!(Yfs::new(yfs.storage).is_err());
+        }
 
         #[test]
-        fn test_directory_invalid_dot_dot() {}
+        fn test_directory_invalid_dot_dot() {
+            let mut yfs = Yfs::new(YfsDisk::empty(10, 10).unwrap()).unwrap();
+            let inum = yfs.create_directory(ROOT_INODE, c"foo").unwrap();
+
+            yfs.write_file(
+                inum,
+                DIRECTORY_ENTRY_SIZE,
+                &bincode::serialize(&DirectoryEntry::new(inum, c"..").unwrap()).unwrap(),
+            )
+            .unwrap();
+
+            assert!(Yfs::new(yfs.storage).is_err());
+        }
 
         #[test]
         fn test_directory_loop() {}
